@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payvault – Enterprise Settlement Reconciliation & Exception Investigation</title>
+  <meta name="description" content="Payvault — Enterprise settlement reconciliation, automated exception investigation, and payment operations." />
+
+  <!-- Google Fonts: Plus Jakarta Sans & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Razorpay Checkout SDK -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+  <script>
+    window.filterReconciliationTable = function(filter) {
+      document.querySelectorAll('#recon-status-filter-buttons .filter-pill-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+      });
+      if (typeof window.renderReconciliationTable === 'function') {
+        window.renderReconciliationTable(filter);
+      }
+    };
+  </script>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       TOP HEADER & NAVIGATION (LUXE BLACK & WHITE DESIGN)
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <header class="app-header" role="banner">
+    <div class="header-inner">
+      
+      <!-- Brand / Logo -->
+      <div class="brand-cluster" onclick="navigateTo('dashboard')" role="button" tabindex="0" title="Go to Dashboard">
+        <div class="brand-logo-box">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect width="24" height="24" rx="6" fill="#ffffff"/>
+            <path d="M6 16.5L9.5 7.5h3.5l-2.2 5.2h4.4L13 16.5H6z" fill="#090d16"/>
+            <path d="M13 7.5h3.5l1.7 4.2h-3.5L13 7.5z" fill="#3b82f6"/>
+          </svg>
+        </div>
+        <div class="brand-text-col">
+          <div class="brand-name-row">
+            <span class="brand-title">Payvault</span>
+            <span class="brand-tag">RECON ENGINE</span>
+          </div>
+          <span class="brand-subtitle">Apex Merchant Operations</span>
+        </div>
+      </div>
+
+      <!-- Main Navigation Tabs -->
+      <nav class="nav-tabs" role="navigation" aria-label="Main Navigation">
+        <button class="nav-tab active" id="nav-dashboard" data-page="dashboard" onclick="navigateTo('dashboard')" type="button">
+          Overview
+        </button>
+        <button class="nav-tab" id="nav-payments" data-page="payments" onclick="navigateTo('payments')" type="button">
+          Payments <span class="tab-count-pill" id="tab-cnt-payments">0</span>
+        </button>
+        <button class="nav-tab" id="nav-settlements" data-page="settlements" onclick="navigateTo('settlements')" type="button">
+          Settlements <span class="tab-count-pill" id="tab-cnt-settlements">T+2</span>
+        </button>
+        <button class="nav-tab" id="nav-reconciliation" data-page="reconciliation" onclick="navigateTo('reconciliation')" type="button">
+          Reconciliation
+        </button>
+        <button class="nav-tab alert-tab" id="nav-investigations" data-page="investigations" onclick="navigateTo('investigations')" type="button">
+          Investigations <span class="tab-badge" id="nav-badge-exceptions">0</span>
+        </button>
+      </nav>
+
+      <!-- Utility Actions -->
+      <div class="header-actions">
+        <!-- Mode Status Pill -->
+        <div class="header-pill-chip" id="mode-pill" title="Operational Mode">
+          <span class="status-pulse-dot online"></span>
+          <span id="header-mode-text">LIVE TEST MODE</span>
+        </div>
+
+        <!-- Sync Button -->
+        <button class="btn-ghost-icon" id="btn-sync-razorpay" title="Sync live transactions from Razorpay Test Mode" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1.5 7A5.5 5.5 0 0111 2.7M12.5 7A5.5 5.5 0 013 11.3M11 1.2v2.5H8.5M3 12.8v-2.5h2.5"/>
+          </svg>
+          <span class="btn-text-desktop">Sync</span>
+        </button>
+
+        <!-- New Payment Primary CTA -->
+        <button class="btn-primary-action" id="btn-header-new-payment" onclick="navigateTo('payment-new')" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <path d="M7 1.5v11M1.5 7h11"/>
+          </svg>
+          <span>New Payment</span>
+        </button>
+
+        <!-- Operator Avatar -->
+        <div class="user-profile-badge" title="Operator: Aaradhy">
+          <span class="user-initials">AA</span>
+        </div>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Benchmark Mode Active Notification (Only shown when store is in SYNTHETIC mode) -->
+  <div class="benchmark-mode-banner" id="benchmark-active-banner" style="display:none;">
+    <div class="benchmark-banner-inner">
+      <div class="benchmark-banner-left">
+        <span class="benchmark-pulse-icon">⚡</span>
+        <div>
+          <strong>Evaluation Benchmark Dataset Active</strong> — Currently displaying 79 benchmark test cases and 24 deliberate exceptions.
+        </div>
+      </div>
+      <button class="btn-benchmark-exit" onclick="switchToLiveMode()" type="button">Switch to Clean Merchant Mode</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       MAIN CONTENT CONTAINER
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <main class="app-main-layout" id="main-container">
+
+    <!-- ────────────────────────────────────────────────────────────────────────
+         PAGE 1: DASHBOARD (OVERVIEW)
+         ──────────────────────────────────────────────────────────────────────── -->
+    <section class="app-page active" id="page-dashboard" aria-label="Dashboard Overview">
+
+      <!-- Hero Greeting & Status Strip -->
+      <div class="dashboard-greeting-bar">
+        <div class="greeting-text-col">
+          <div class="greeting-title-row">
+            <h1 class="greeting-title">Good morning, Aaradhy 👋</h1>
+            <span class="gateway-status-tag">
+              <span class="status-pulse-dot online"></span>
+              All 4 Nodal Gateways Connected
+            </span>
+          </div>
+          <p class="greeting-subtitle">Here is your settlement and payment reconciliation overview for your merchant accounts.</p>
+        </div>
+
+        <div class="greeting-controls">
+          <div class="date-range-badge">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="1.5" y="2.5" width="11" height="10" rx="2"/>
+              <path d="M1.5 5.5h11M4.5 1.5v2M9.5 1.5v2"/>
+            </svg>
+            <span>Current Settlement Cycle · T+2</span>
+          </div>
+          <button class="btn-secondary-action" id="btn-export-report" onclick="window.print()" type="button">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M7 1.5v7M4 5.5l3 3 3-3M2 10.5v1a1 1 0 001 1h8a1 1 0 001-1v-1"/>
+            </svg>
+            Export Report
+          </button>
+        </div>
+      </div>
+
+      <!-- Empty State Banner (Shown when store has 0 records) -->
+      <div class="empty-state-banner" id="dashboard-empty-state" style="display:none;">
+        <div class="empty-state-graphic">💳</div>
+        <h2 class="empty-state-heading">No payment transactions recorded yet</h2>
+        <p class="empty-state-subtext">Process your first live test payment using Razorpay Checkout to start tracking real-time nodal settlement and automated ledger reconciliation.</p>
+        <div class="empty-state-buttons">
+          <button class="btn-primary-action" onclick="navigateTo('payment-new')" type="button">+ Process Test Payment</button>
+        </div>
+      </div>
+
+      <!-- 4 Hero Balanced Metric Cards -->
+      <div class="hero-metrics-grid" id="dashboard-metrics-grid">
+        
+        <!-- Card 1: Total Payments Processed -->
+        <div class="fintech-metric-card" id="card-metric-total">
+          <div class="metric-card-top">
+            <span class="metric-card-label">Total Processed</span>
+            <span class="metric-card-pill info font-mono" id="dash-cnt-total-txns">0 txns</span>
+          </div>
+          <div class="metric-card-amount font-mono" id="dash-val-total">₹0.00</div>
+          <div class="metric-card-bottom">
+            <span class="metric-trend positive">↑ 100% live</span>
+            <span class="metric-sublabel" id="dash-sub-total">Gross collections in cycle</span>
+          </div>
+        </div>
+
+        <!-- Card 2: Cleanly Reconciled -->
+        <div class="fintech-metric-card" id="card-metric-reconciled">
+          <div class="metric-card-top">
+            <span class="metric-card-label">Successfully Reconciled</span>
+            <span class="metric-card-pill success font-mono" id="dash-rate-reconciled">100% clean</span>
+          </div>
+          <div class="metric-card-amount font-mono text-success" id="dash-val-reconciled">₹0.00</div>
+          <div class="metric-card-bottom">
+            <span class="metric-trend positive">✓ Fully balanced</span>
+            <span class="metric-sublabel" id="dash-sub-reconciled">Matched against merchant ledger</span>
+          </div>
+        </div>
+
+        <!-- Card 3: Needs Attention (Exceptions) -->
+        <div class="fintech-metric-card alert" id="card-metric-attention" onclick="navigateTo('investigations')" style="cursor:pointer;" title="Click to view open investigations">
+          <div class="metric-card-top">
+            <span class="metric-card-label">Needs Attention</span>
+            <span class="metric-card-pill warning" id="dash-badge-attention">0 Issues</span>
+          </div>
+          <div class="metric-card-amount font-mono text-warning" id="dash-val-attention">₹0.00</div>
+          <div class="metric-card-bottom">
+            <span class="metric-trend warning font-mono" id="dash-cnt-open-exceptions">0 active exceptions</span>
+            <span class="metric-sublabel">At risk in open review</span>
+          </div>
+        </div>
+
+        <!-- Card 4: Resolved / Audited -->
+        <div class="fintech-metric-card" id="card-metric-resolved">
+          <div class="metric-card-top">
+            <span class="metric-card-label">Resolved Cases</span>
+            <span class="metric-card-pill success" id="dash-badge-resolved">Audited</span>
+          </div>
+          <div class="metric-card-amount font-mono text-primary" id="dash-val-resolved">₹0.00</div>
+          <div class="metric-card-bottom">
+            <span class="metric-trend positive" id="dash-cnt-resolved-cases">0 cases resolved</span>
+            <span class="metric-sublabel">Human operator verified</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Money Movement & Settlement Balance Strip -->
+      <div class="money-flow-strip">
+        <div class="flow-step">
+          <span class="flow-step-label">1. Gross Captured</span>
+          <span class="flow-step-val font-mono" id="flow-gross">₹0.00</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <span class="flow-step-label">2. Platform Fees (2%)</span>
+          <span class="flow-step-val font-mono" id="flow-fee">₹0.00</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <span class="flow-step-label">3. GST on Fee (18%)</span>
+          <span class="flow-step-val font-mono" id="flow-tax">₹0.00</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <span class="flow-step-label">4. Net Payout (T+2)</span>
+          <span class="flow-step-val font-mono text-success" id="flow-net">₹0.00</span>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step alert">
+          <span class="flow-step-label">5. Ledger Discrepancy</span>
+          <span class="flow-step-val font-mono text-warning" id="flow-variance">₹0.00</span>
+        </div>
+      </div>
+
+      <!-- Dashboard Two-Column Section -->
+      <div class="dashboard-split-grid">
+        
+        <!-- Left: Action Required (Priority Investigations Queue) -->
+        <div class="dashboard-card">
+          <div class="dashboard-card-header">
+            <div class="header-title-group">
+              <h2 class="card-section-title">Priority Exceptions Requiring Review</h2>
+              <span class="card-section-subtitle">Discrepancies identified by the deterministic engine needing human verification</span>
+            </div>
+            <button class="btn-ghost-sm" onclick="navigateTo('investigations')" type="button">View All →</button>
+          </div>
+
+          <div class="card-content-box">
+            <div class="priority-queue-list" id="dashboard-priority-queue">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Recent Payment Activity -->
+        <div class="dashboard-card">
+          <div class="dashboard-card-header">
+            <div class="header-title-group">
+              <h2 class="card-section-title">Recent Payment Transactions</h2>
+              <span class="card-section-subtitle">Real-time payment captures and automated settlement tracking</span>
+            </div>
+            <button class="btn-ghost-sm" onclick="navigateTo('payments')" type="button">All Payments →</button>
+          </div>
+
+          <div class="card-content-box">
+            <table class="fintech-table compact">
+              <thead>
+                <tr>
+                  <th>Payment ID</th>
+                  <th>Method</th>
+                  <th>Amount</th>
+                  <th>Recon Status</th>
+                </tr>
+              </thead>
+              <tbody id="dashboard-recent-txns-body">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Benchmark Trigger Footer Box (Separated from normal flow) -->
+      <div class="benchmark-footer-box">
+        <div>
+          <strong>Evaluation & Regression Benchmark:</strong>
+          <span class="text-muted" style="font-size:0.8rem;margin-left:0.35rem;">Need to test deterministic reconciliation across all 9 exception scenarios?</span>
+        </div>
+        <button class="btn-secondary-action" id="btn-load-benchmark-footer" onclick="loadBenchmarkDataset()" type="button">
+          Load 79-Case Benchmark Dataset
+        </button>
+      </div>
+
+    </section>
+
+
+    <!-- ────────────────────────────────────────────────────────────────────────
+         PAGE 2: NEW PAYMENT (CREATE TEST PAYMENT & VISUAL LIFECYCLE)
+         ──────────────────────────────────────────────────────────────────────── -->
+    <section class="app-page" id="page-payment-new" aria-label="New Payment Creation" style="display:none;">
+      
+      <div class="page-title-banner">
+        <div>
+          <h1 class="page-main-heading">Process New Payment</h1>
+          <p class="page-main-subtext">Trigger a local demo payment or real Razorpay transaction to trace end-to-end payment capture, simulated T+2 settlement, and reconciliation.</p>
+        </div>
+        <button class="btn-secondary-action" onclick="navigateTo('dashboard')" type="button">← Back to Overview</button>
+      </div>
+
+      <!-- Payment Creation Container (Setup View) -->
+      <div id="payment-setup-container" class="payment-creation-grid">
+        
+        <!-- Left: Payment Form Card -->
+        <div class="creation-form-card">
+          <h2 class="form-section-heading">Payment Parameters</h2>
+
+          <!-- Payment Processing Mode Toggle -->
+          <div class="form-group">
+            <label class="form-label">Execution Mode</label>
+            <div class="processing-mode-toggle">
+              <button class="mode-toggle-card active" id="btn-mode-local" onclick="setProcessingMode('local')" type="button">
+                <span class="mode-toggle-icon">⚡</span>
+                <div class="mode-toggle-text">
+                  <strong>Local Demo (Instant)</strong>
+                  <span>Direct local reconciliation simulation without external gateway</span>
+                </div>
+              </button>
+              <button class="mode-toggle-card" id="btn-mode-razorpay" onclick="setProcessingMode('razorpay')" type="button">
+                <span class="mode-toggle-icon">💳</span>
+                <div class="mode-toggle-text">
+                  <strong>Razorpay Test Mode</strong>
+                  <span>Real Razorpay Checkout modal gateway popup</span>
+                </div>
+              </button>
+            </div>
+            <div id="mode-active-notice" style="margin-top:0.6rem;font-size:0.8rem;color:var(--color-text-muted);line-height:1.4;">
+              ⚡ <strong>Local Demo Mode:</strong> Instant offline deterministic execution. Zero external API credentials required.
+            </div>
+          </div>
+
+          <!-- Amount Input -->
+          <div class="form-group">
+            <label class="form-label" for="custom-amount-input">Payment Amount (INR)</label>
+            <div class="amount-input-wrapper">
+              <span class="currency-symbol">₹</span>
+              <input type="number" id="custom-amount-input" class="amount-field font-mono" value="1000.00" min="1" max="500000" step="0.01" placeholder="0.00" />
+            </div>
+            <div class="quick-chips-row">
+              <button class="quick-chip" onclick="setPaymentAmount(100)" type="button">₹100</button>
+              <button class="quick-chip" onclick="setPaymentAmount(500)" type="button">₹500</button>
+              <button class="quick-chip active" onclick="setPaymentAmount(1000)" type="button">₹1,000</button>
+              <button class="quick-chip" onclick="setPaymentAmount(5000)" type="button">₹5,000</button>
+              <button class="quick-chip" onclick="setPaymentAmount(12345)" type="button">₹12,345</button>
+            </div>
+          </div>
+
+          <!-- Customer Reference / Order Note -->
+          <div class="form-group">
+            <label class="form-label" for="payment-note-input">Merchant Order Reference (Optional)</label>
+            <input type="text" id="payment-note-input" class="text-input-field font-mono" placeholder="e.g. order_cust_9921" />
+          </div>
+
+          <!-- Payment Method Selector -->
+          <div class="form-group">
+            <label class="form-label">Payment Instrument</label>
+            <div class="method-cards-grid">
+              <label class="method-card active" for="method-card">
+                <input type="radio" id="method-card" name="payment_method" value="card" checked />
+                <div class="method-info">
+                  <span class="method-icon">💳</span>
+                  <span class="method-name">Credit / Debit Card</span>
+                </div>
+              </label>
+              <label class="method-card" for="method-upi">
+                <input type="radio" id="method-upi" name="payment_method" value="upi" />
+                <div class="method-info">
+                  <span class="method-icon">⚡</span>
+                  <span class="method-name">UPI / QR</span>
+                </div>
+              </label>
+              <label class="method-card" for="method-netbanking">
+                <input type="radio" id="method-netbanking" name="payment_method" value="netbanking" />
+                <div class="method-info">
+                  <span class="method-icon">🏦</span>
+                  <span class="method-name">Net Banking</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Developer Exception Injection Simulator -->
+          <div class="form-group exception-simulator-box">
+            <div class="simulator-header">
+              <span class="simulator-label">🧪 Reconciliation Scenario Simulator</span>
+              <span class="simulator-tag">Evaluation Mode</span>
+            </div>
+            <select id="anomaly-select" class="dropdown-field">
+              <option value="CLEAN_MATCH" selected>Normal Payment (Clean Match — 100% Reconciled)</option>
+              <option value="FEE_TAX_VARIANCE">Inject Fee / GST Tax Variance (+₹25.00 fee discrepancy)</option>
+              <option value="MISSING_ORDER">Inject Missing Order (Settlement without merchant order ID)</option>
+              <option value="DUPLICATE">Inject Duplicate Settlement (Simulated double payout)</option>
+              <option value="ADJUSTMENT">Inject Unlinked Settlement Adjustment</option>
+              <option value="UNEXPLAINED">Inject Unexplained Shortfall Discrepancy</option>
+            </select>
+          </div>
+
+          <!-- Primary Action CTA -->
+          <button class="btn-checkout-primary" id="btn-pay-now" type="button">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="4" width="14" height="10" rx="2"/>
+              <path d="M2 8h14M5 11h2"/>
+            </svg>
+            <span id="btn-pay-label">Process Payment (₹1,000.00)</span>
+          </button>
+
+        </div>
+
+        <!-- Right: Real-time Lifecycle Visualization Panel -->
+        <div class="creation-lifecycle-card">
+          <h2 class="form-section-heading">Automated Reconciliation Pipeline</h2>
+          
+          <!-- Lifecycle Visual Steps -->
+          <div class="lifecycle-steps-chain" id="payment-lifecycle-chain">
+            
+            <div class="chain-step active" id="step-payment">
+              <div class="chain-node-box">
+                <span class="chain-dot">1</span>
+              </div>
+              <div class="chain-content">
+                <div class="chain-title">Payment Capture</div>
+                <div class="chain-desc" id="chain-desc-pay">Awaiting checkout execution via Razorpay Test Gateway.</div>
+                <div class="chain-meta font-mono" id="chain-meta-pay">—</div>
+              </div>
+            </div>
+
+            <div class="chain-step" id="step-settlement">
+              <div class="chain-node-box">
+                <span class="chain-dot">2</span>
+              </div>
+              <div class="chain-content">
+                <div class="chain-title">T+2 Settlement Generation</div>
+                <div class="chain-desc" id="chain-desc-set">Simulated settlement record generated with 2% fee & 18% GST.</div>
+                <div class="chain-meta font-mono" id="chain-meta-set">—</div>
+              </div>
+            </div>
+
+            <div class="chain-step" id="step-reconciliation">
+              <div class="chain-node-box">
+                <span class="chain-dot">3</span>
+              </div>
+              <div class="chain-content">
+                <div class="chain-title">Deterministic Reconciliation</div>
+                <div class="chain-desc" id="chain-desc-recon">Matches settlement credit against merchant expected ledger.</div>
+                <div class="chain-meta font-mono" id="chain-meta-recon">—</div>
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+      <!-- Post-Payment Focused Confirmation Panel (Clean post-completion lifecycle) -->
+      <div id="payment-confirmation-container" class="payment-confirmation-panel" style="display:none;">
+        <div class="confirm-header-row">
+          <div class="confirm-status-icon success" id="confirm-status-icon">✓</div>
+          <div class="confirm-title-col">
+            <h2 class="confirm-title" id="confirm-main-title">Payment Successfully Captured & Reconciled</h2>
+            <span class="confirm-subtitle" id="confirm-sub-title">Deterministic reconciliation engine processed transaction against merchant ledger.</span>
+          </div>
+        </div>
+
+        <div class="confirm-details-grid">
+          <div class="confirm-metric-item">
+            <span class="confirm-metric-label">Payment ID</span>
+            <span class="confirm-metric-val font-mono" id="confirm-val-pay-id" style="font-size:0.95rem;color:var(--color-primary);">pay_...</span>
+          </div>
+          <div class="confirm-metric-item">
+            <span class="confirm-metric-label">Merchant Order</span>
+            <span class="confirm-metric-val font-mono" id="confirm-val-order-id" style="font-size:0.95rem;">order_...</span>
+          </div>
+          <div class="confirm-metric-item">
+            <span class="confirm-metric-label">Gross Amount</span>
+            <span class="confirm-metric-val font-mono" id="confirm-val-gross">₹0.00</span>
+          </div>
+          <div class="confirm-metric-item">
+            <span class="confirm-metric-label">Net Credited (T+2)</span>
+            <span class="confirm-metric-val font-mono text-success" id="confirm-val-net">₹0.00</span>
+          </div>
+          <div class="confirm-metric-item">
+            <span class="confirm-metric-label">Reconciliation Status</span>
+            <span class="confirm-metric-val" id="confirm-val-status"><span class="status-pill success">MATCHED</span></span>
+          </div>
+          <div class="confirm-metric-item">
+            <span class="confirm-metric-label">Settlement Batch</span>
+            <span class="confirm-metric-val font-mono" id="confirm-val-settlement" style="font-size:0.85rem;color:var(--color-text-muted);">setl_...</span>
+          </div>
+        </div>
+
+        <div class="confirm-actions-row">
+          <button class="btn-primary-action" id="btn-confirm-inv" onclick="navigateTo('investigations')" type="button" style="display:none;">
+            ⚡ Open Investigation Workstation
+          </button>
+          <button class="btn-secondary-action" id="btn-confirm-recon" onclick="navigateTo('reconciliation')" type="button">
+            View in Reconciliation Table
+          </button>
+          <button class="btn-primary-action" id="btn-confirm-another" onclick="resetPaymentForm()" type="button">
+            + Create Another Payment
+          </button>
+        </div>
+      </div>
+
+    </section>
+
+
+    <!-- ────────────────────────────────────────────────────────────────────────
+         PAGE 3: PAYMENTS LIST
+         ──────────────────────────────────────────────────────────────────────── -->
+    <section class="app-page" id="page-payments" aria-label="Payments Ledger" style="display:none;">
+      
+      <div class="page-title-banner">
+        <div>
+          <h1 class="page-main-heading">Payments Ledger</h1>
+          <p class="page-main-subtext">All customer payments captured via Razorpay with real-time settlement & ledger tracking.</p>
+        </div>
+        <button class="btn-primary-action" onclick="navigateTo('payment-new')" type="button">+ Process Payment</button>
+      </div>
+
+      <div class="table-container-card">
+        <div class="table-toolbar">
+          <div class="search-box-wrapper">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="6" cy="6" r="4.5"/>
+              <path d="M9.5 9.5l3 3"/>
+            </svg>
+            <input type="text" id="search-payments" class="table-search-input font-mono" placeholder="Search by payment ID or order..." oninput="filterPaymentsTable()" />
+          </div>
+          <div class="table-counts-label font-mono" id="payments-table-count">Showing 0 payments</div>
+        </div>
+
+        <table class="fintech-table" id="payments-ledger-table">
+          <thead>
+            <tr>
+              <th>Payment ID</th>
+              <th>Order ID</th>
+              <th>Method</th>
+              <th>Gross Amount</th>
+              <th>Expected Net</th>
+              <th>Created Date</th>
+              <th>Lifecycle Status</th>
+            </tr>
+          </thead>
+          <tbody id="payments-table-body">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+
+    </section>
+
+
+    <!-- ────────────────────────────────────────────────────────────────────────
+         PAGE 4: SETTLEMENTS (MONEY MOVEMENT & BATCHES)
+         ──────────────────────────────────────────────────────────────────────── -->
+    <section class="app-page" id="page-settlements" aria-label="Settlements Overview" style="display:none;">
+      
+      <div class="page-title-banner">
+        <div>
+          <h1 class="page-main-heading">Settlement Batches & Payouts</h1>
+          <p class="page-main-subtext">Track T+2 nodal bank settlements, contracted 2% platform fee deductions, and 18% GST calculations.</p>
+        </div>
+        <button class="btn-secondary-action" id="btn-sync-settlements" onclick="syncRazorpayData()" type="button">Sync Settlements</button>
+      </div>
+
+      <!-- Settlement High-Level Financial Bar -->
+      <div class="settlement-summary-strip">
+        <div class="summary-metric-block">
+          <span class="sum-label">Total Batches</span>
+          <span class="sum-val font-mono" id="setl-cnt-batches">4 Batches</span>
+        </div>
+        <div class="summary-metric-block">
+          <span class="sum-label">Gross Processed</span>
+          <span class="sum-val font-mono" id="setl-val-gross">₹0.00</span>
+        </div>
+        <div class="summary-metric-block">
+          <span class="sum-label">Platform Fees (2%)</span>
+          <span class="sum-val font-mono text-muted" id="setl-val-fees">₹0.00</span>
+        </div>
+        <div class="summary-metric-block">
+          <span class="sum-label">GST on Fees (18%)</span>
+          <span class="sum-val font-mono text-muted" id="setl-val-tax">₹0.00</span>
+        </div>
+        <div class="summary-metric-block">
+          <span class="sum-label">Net Credited Payout</span>
+          <span class="sum-val font-mono text-success" id="setl-val-net">₹0.00</span>
+        </div>
+      </div>
+
+      <!-- Settlement Batches Grid / List -->
+      <div class="settlement-batches-container" id="settlement-batches-container">
+        <!-- Dynamically populated batch cards -->
+      </div>
+
+    </section>
+
+
+    <!-- ────────────────────────────────────────────────────────────────────────
+         PAGE 5: RECONCILIATION (MATCHED VS DISCREPANCY COMPARISONS)
+         ──────────────────────────────────────────────────────────────────────── -->
+    <section class="app-page" id="page-reconciliation" aria-label="Reconciliation Engine" style="display:none;">
+      
+      <div class="page-title-banner">
+        <div>
+          <h1 class="page-main-heading">Reconciliation Audit</h1>
+          <p class="page-main-subtext">Automated line-by-line comparison between gateway settlement credits and merchant ledger expectations.</p>
+        </div>
+        <div class="recon-status-filters" id="recon-status-filter-buttons">
+          <button class="filter-pill-btn active" data-filter="ALL" onclick="filterReconciliationTable('ALL')">All</button>
+          <button class="filter-pill-btn" data-filter="MATCHED" onclick="filterReconciliationTable('MATCHED')">Clean Matches</button>
+          <button class="filter-pill-btn" data-filter="EXCEPTION" onclick="filterReconciliationTable('EXCEPTION')">Exceptions</button>
+        </div>
+      </div>
+
+      <div class="table-container-card">
+        <div class="table-toolbar">
+          <div class="search-box-wrapper">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="6" cy="6" r="4.5"/>
+              <path d="M9.5 9.5l3 3"/>
+            </svg>
+            <input type="text" id="search-recon" class="table-search-input font-mono" placeholder="Search by entity ID, order ID, or category..." oninput="searchReconciliationTable()" />
+          </div>
+          <div class="table-counts-label font-mono" id="recon-table-count">Showing 0 results</div>
+        </div>
+
+        <table class="fintech-table" id="recon-audit-table">
+          <thead>
+            <tr>
+              <th>Settlement Entity</th>
+              <th>Merchant Order</th>
+              <th>Gross Amount</th>
+              <th>Expected Net</th>
+              <th>Gateway Credited</th>
+              <th>Variance</th>
+              <th>Recon Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="recon-table-body">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+
+    </section>
+
+
+    <!-- ────────────────────────────────────────────────────────────────────────
+         PAGE 6: INVESTIGATIONS (PRODUCTION WORKSTATION)
+         ──────────────────────────────────────────────────────────────────────── -->
+    <section class="app-page" id="page-investigations" aria-label="Exception Investigations Workstation" style="display:none;">
+      
+      <!-- Workstation Master-Detail Container -->
+      <div class="investigation-master-detail-layout" id="investigation-workstation-content">
+        
+        <!-- Left Sidebar: Exception Queue -->
+        <aside class="case-queue-sidebar" aria-label="Exceptions Queue">
+          
+          <div class="sidebar-header-box">
+            <div class="sidebar-title-row">
+              <span class="sidebar-title">Investigation Queue</span>
+              <span class="sidebar-count-badge font-mono" id="case-queue-total-count">0</span>
+            </div>
+
+            <!-- Status Tabs (Chunk 3 Lifecycle) -->
+            <div class="status-tab-pills" role="tablist">
+              <button class="status-tab-btn active" data-status="ALL" type="button">
+                All <span class="pill-cnt font-mono" id="status-cnt-all">0</span>
+              </button>
+              <button class="status-tab-btn" data-status="OPEN" type="button">
+                Open <span class="pill-cnt font-mono" id="status-cnt-open">0</span>
+              </button>
+              <button class="status-tab-btn" data-status="IN_REVIEW" type="button">
+                In Review <span class="pill-cnt font-mono" id="status-cnt-review">0</span>
+              </button>
+              <button class="status-tab-btn" data-status="RESOLVED" type="button">
+                Resolved <span class="pill-cnt font-mono" id="status-cnt-resolved">0</span>
+              </button>
+            </div>
+
+            <!-- Category Filter Dropdown -->
+            <div class="sidebar-filter-row">
+              <select id="case-filter-select" class="sidebar-category-dropdown">
+                <option value="ALL">All Categories</option>
+                <option value="FEE_TAX_VARIANCE">Fee / Tax Variance</option>
+                <option value="TIMING_MISMATCH">Timing Mismatch</option>
+                <option value="MISSING_ORDER">Missing Order</option>
+                <option value="MISSING_PAYMENT">Missing Payment</option>
+                <option value="DUPLICATE">Duplicate Settlement</option>
+                <option value="ADJUSTMENT">Adjustment</option>
+                <option value="UNEXPLAINED">Unexplained Shortfall</option>
+                <option value="PARTIAL_REFUND">Partial Refund</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Case Items List -->
+          <ul class="case-cards-list" id="case-items-list" role="list">
+            <!-- Dynamically populated cards -->
+          </ul>
+
+        </aside>
+
+
+        <!-- Right Panel: Investigation Detail View -->
+        <div class="case-detail-workspace" id="case-detail-workspace">
+          
+          <!-- Empty Prompt (if no case selected) -->
+          <div class="workspace-empty-prompt" id="investigation-empty-prompt" style="display:none;">
+            <div class="empty-icon">🔍</div>
+            <h2 class="empty-title">Select an exception case to investigate</h2>
+            <p class="empty-desc">Choose an exception from the queue to view root causes, evidence provenance, and historical intelligence.</p>
+          </div>
+
+          <!-- Active Case Investigation Content -->
+          <div class="active-case-container" id="investigation-case-content">
+            
+            <!-- Case Header -->
+            <div class="case-header-card">
+              
+              <div class="case-header-top">
+                <div class="case-title-group">
+                  <div class="case-badges-row">
+                    <span class="case-cat-badge font-mono" id="view-category-badge">FEE_TAX_VARIANCE</span>
+                    <span class="case-status-badge font-mono" id="view-user-status-pill">OPEN</span>
+                    <span class="case-id-text font-mono" id="view-case-id">exc_000001</span>
+                  </div>
+                  <h1 class="case-main-title" id="view-case-title">Platform Fee Variance Detected</h1>
+                </div>
+
+                <div class="case-exposure-box">
+                  <span class="exposure-label">Amount at Risk</span>
+                  <span class="exposure-value font-mono" id="view-amount-at-risk">₹0.00</span>
+                </div>
+              </div>
+
+              <!-- Case Entity References -->
+              <div class="case-meta-chips-bar" id="view-case-subtitle">
+                <!-- Dynamically populated -->
+              </div>
+
+              <!-- Header Action Buttons -->
+              <div class="case-actions-bar">
+                <button class="btn-investigate-action" id="btn-run-investigation" type="button">
+                  <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <path d="M7.5 1.5l1.5 4.5h4.5l-3.5 2.5 1.5 4.5-4-3-4 3 1.5-4.5-3.5-2.5h4.5l1.5-4.5z"/>
+                  </svg>
+                  <span id="run-btn-text">Run Payvault Investigation</span>
+                </button>
+
+                <button class="btn-resolve-action" id="btn-open-resolve" type="button">
+                  <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path d="M3 7.5l3 3 6-6"/>
+                  </svg>
+                  <span>Mark as Resolved</span>
+                </button>
+
+                <button class="btn-reopen-action" id="btn-reopen-case" type="button" style="display:none;">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <path d="M1.5 7A5.5 5.5 0 0111 2.7M12.5 7A5.5 5.5 0 013 11.3M11 1.2v2.5H8.5M3 12.8v-2.5h2.5"/>
+                  </svg>
+                  <span>Reopen Case</span>
+                </button>
+              </div>
+
+            </div>
+
+            <!-- Resolution Summary Banner (Shown for RESOLVED cases) -->
+            <div class="resolution-banner-card" id="resolution-summary-card" style="display:none;">
+              <div class="res-banner-header">
+                <div class="res-check-icon">✓</div>
+                <div class="res-banner-title-col">
+                  <div class="res-banner-title">Case Marked as Resolved by Operator</div>
+                  <div class="res-banner-time" id="view-resolution-time">Resolved on Aug 30, 2026</div>
+                </div>
+              </div>
+              <div class="res-banner-body">
+                <div class="res-field-item">
+                  <span class="res-field-tag">Resolution Reason</span>
+                  <span class="res-field-val font-mono" id="view-resolution-reason">—</span>
+                </div>
+                <div class="res-field-item full">
+                  <span class="res-field-tag">Operator Notes</span>
+                  <p class="res-notes-p" id="view-resolution-notes">—</p>
+                </div>
+                <div class="res-field-item">
+                  <span class="res-field-tag">Audited By</span>
+                  <span class="res-field-val font-mono" id="view-resolution-actor">operator</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Inline Investigation Progress Component (Clean, Non-blocking, Connected) -->
+            <div class="inline-investigation-progress" id="investigation-progress" style="display:none;">
+              <div class="inline-progress-header">
+                <span class="inline-progress-spinner"></span>
+                <div class="inline-progress-title-col">
+                  <span class="inline-progress-title">Investigating case…</span>
+                  <span class="inline-progress-subtitle">Synthesizing deterministic evidence & intelligence context</span>
+                </div>
+              </div>
+              <div class="inline-checklist-steps">
+                <div class="checklist-step-item" id="inv-step-1">
+                  <span class="step-status-icon font-mono" id="inv-icon-1">○</span>
+                  <span class="step-status-text">Extracting settlement transactions & ledger records</span>
+                </div>
+                <div class="checklist-step-item" id="inv-step-2">
+                  <span class="step-status-icon font-mono" id="inv-icon-2">○</span>
+                  <span class="step-status-text">Verifying platform fee & GST against merchant contract</span>
+                </div>
+                <div class="checklist-step-item" id="inv-step-3">
+                  <span class="step-status-icon font-mono" id="inv-icon-3">○</span>
+                  <span class="step-status-text">Scanning cross-transaction historical patterns & similar cases</span>
+                </div>
+                <div class="checklist-step-item" id="inv-step-4">
+                  <span class="step-status-icon font-mono" id="inv-icon-4">○</span>
+                  <span class="step-status-text">Synthesizing investigation findings & operator recommendations</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pre-Investigation Prompt Card (shown when case is OPEN and needs investigation) -->
+            <div class="pre-investigation-callout" id="pre-investigation-callout" style="display:none;">
+              <div class="pre-inv-header">
+                <span class="pre-inv-icon">⚡</span>
+                <span class="pre-inv-title">Discrepancy Flagged — Payvault Investigation Ready</span>
+              </div>
+              <p class="pre-inv-desc">
+                The deterministic reconciliation engine identified a financial mismatch in this settlement batch. Run the Payvault Investigation to analyze ledger records, verify contracted gateway fees, check cross-transaction patterns, and synthesize human resolution recommendations.
+              </p>
+              <div class="pre-inv-meta-grid">
+                <div class="pre-inv-meta-item">
+                  <span class="pre-inv-meta-label">Discrepancy Category</span>
+                  <span class="pre-inv-meta-value font-mono text-danger" id="pre-inv-cat">FEE_TAX_VARIANCE</span>
+                </div>
+                <div class="pre-inv-meta-item">
+                  <span class="pre-inv-meta-label">Exposure at Risk</span>
+                  <span class="pre-inv-meta-value font-mono text-danger" id="pre-inv-risk">₹0.00</span>
+                </div>
+                <div class="pre-inv-meta-item">
+                  <span class="pre-inv-meta-label">Settlement Batch</span>
+                  <span class="pre-inv-meta-value font-mono" id="pre-inv-batch">—</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Investigation Intelligence Provenance Metadata Card -->
+            <div class="investigation-intelligence-provenance" id="investigation-provenance-panel" style="display:none;">
+              <div class="provenance-title-strip">
+                <span class="prov-title">INVESTIGATION INTELLIGENCE PROVENANCE</span>
+                <span class="prov-tag" id="prov-runtime-tag">LOCAL RUNTIME</span>
+              </div>
+              <div class="provenance-grid">
+                <div class="provenance-grid-col">
+                  <span class="prov-col-label">DETERMINISTIC RECONCILIATION</span>
+                  <span class="prov-col-val text-success">✓ Verified (Integer-Paise Engine)</span>
+                </div>
+                <div class="provenance-grid-col">
+                  <span class="prov-col-label">HISTORICAL PATTERN ANALYSIS</span>
+                  <span class="prov-col-val text-primary" id="prov-history-val">✓ Computed Precedents</span>
+                </div>
+                <div class="provenance-grid-col">
+                  <span class="prov-col-label">LOCAL AI EXPLANATION</span>
+                  <span class="prov-col-val" id="prov-ai-val">○ Payvault Local Intelligence</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Core Investigation Findings (The 3 Questions) -->
+            <div class="investigation-core-card" id="finding-hero-card">
+              
+              <!-- Section 1: What Happened? -->
+              <div class="finding-section">
+                <div class="finding-section-header">
+                  <span class="finding-q-badge">1</span>
+                  <h2 class="finding-q-title">What happened?</h2>
+                </div>
+                <p class="finding-statement-text" id="finding-statement-text">
+                  The settlement credit contains an unexplained financial variance that does not match the expected merchant ledger calculation.
+                </p>
+              </div>
+
+              <!-- Section 2: Why Does It Matter? -->
+              <div class="finding-section">
+                <div class="finding-section-header">
+                  <span class="finding-q-badge">2</span>
+                  <h2 class="finding-q-title">Why does it matter?</h2>
+                </div>
+                <p class="finding-impact-text" id="finding-impact-text">
+                  Discrepancies in gateway deductions or timing create balance sheet variances across reporting periods.
+                </p>
+              </div>
+
+              <!-- Section 3: What Should I Do? -->
+              <div class="finding-section">
+                <div class="finding-section-header">
+                  <span class="finding-q-badge">3</span>
+                  <h2 class="finding-q-title">What should I do?</h2>
+                </div>
+                <ol class="action-steps-list" id="finding-actions-list">
+                  <li class="action-step-item">
+                    <span class="step-badge">1</span>
+                    <span class="step-desc">Verify settlement statement against nodal bank credit records.</span>
+                  </li>
+                </ol>
+              </div>
+
+              <!-- Key Evidence Chips Row -->
+              <div class="evidence-chips-section">
+                <span class="evidence-chips-title">Auditable Transaction Facts:</span>
+                <div class="evidence-chips-grid" id="finding-evidence-chips">
+                  <!-- Dynamically populated fact chips -->
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Visual Lifecycle Timeline -->
+            <div class="visual-timeline-card">
+              <h3 class="accordion-header-title">Visual Transaction Lifecycle</h3>
+              <div class="visual-timeline-steps" id="case-visual-timeline">
+                <!-- Dynamically populated visual timeline -->
+              </div>
+            </div>
+
+            <!-- Progressive Disclosure Accordions -->
+            <div class="accordion-group">
+              
+              <!-- Accordion 1: Financial Mathematical Breakdown -->
+              <details class="fintech-accordion" open>
+                <summary class="accordion-summary">
+                  <span class="acc-title">▸ Financial Mathematical Breakdown</span>
+                  <span class="acc-hint">Exact integer-paise calculations</span>
+                </summary>
+                <div class="accordion-content">
+                  <table class="fintech-table compact">
+                    <thead>
+                      <tr>
+                        <th>Financial Component</th>
+                        <th>Actual Charged</th>
+                        <th>Expected Baseline</th>
+                        <th>Variance</th>
+                        <th>Formatted INR</th>
+                      </tr>
+                    </thead>
+                    <tbody id="statement-table-body">
+                      <!-- Dynamically populated -->
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+
+              <!-- Accordion 2: Entity Linkage Graph -->
+              <details class="fintech-accordion">
+                <summary class="accordion-summary">
+                  <span class="acc-title">▸ Entity Relational Linkages</span>
+                  <span class="acc-hint">Order, Payment, and Settlement Graph</span>
+                </summary>
+                <div class="accordion-content">
+                  <div id="relationship-graph-container">
+                    <!-- Dynamically populated -->
+                  </div>
+                </div>
+              </details>
+
+              <!-- Accordion 3: Historical Intelligence & Precedents (Chunk 4) -->
+              <details class="fintech-accordion" id="accordion-intelligence">
+                <summary class="accordion-summary">
+                  <span class="acc-title">▸ Historical Intelligence & Precedents</span>
+                  <span class="acc-hint">Similar cases, cross-transaction patterns & anomalies</span>
+                </summary>
+                <div class="accordion-content">
+                  <div id="intelligence-container">
+                    <!-- Dynamically populated via Chunk 4 -->
+                  </div>
+                </div>
+              </details>
+
+              <!-- Accordion 4: Case Audit Trail (Chunk 3) -->
+              <details class="fintech-accordion" id="accordion-audit">
+                <summary class="accordion-summary">
+                  <span class="acc-title">▸ Case Audit Trail & History</span>
+                  <span class="acc-hint">Immutable append-only lifecycle log</span>
+                </summary>
+                <div class="accordion-content">
+                  <div id="audit-timeline-container">
+                    <!-- Dynamically populated via Chunk 3 -->
+                  </div>
+                </div>
+              </details>
+
+            </div><!-- /accordions -->
+
+          </div><!-- /investigation-findings-panel or similar -->
+
+          <!-- ══════════════════════════════════════════════════════════════════
+               ASK PAYVAULT AI — Case-Aware Investigation Chat
+               ══════════════════════════════════════════════════════════════════ -->
+          <section class="chat-panel-section" id="ask-payvault-ai-section" aria-label="Ask Payvault AI">
+
+            <div class="chat-panel-header">
+              <div class="chat-panel-title-row">
+                <div class="chat-panel-icon" aria-hidden="true">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <rect width="24" height="24" rx="6" fill="#0f172a"/>
+                    <path d="M6 16.5L9.5 7.5h3.5l-2.2 5.2h4.4L13 16.5H6z" fill="#ffffff"/>
+                    <path d="M13 7.5h3.5l1.7 4.2h-3.5L13 7.5z" fill="#3b82f6"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3 class="chat-panel-title">Ask Payvault AI</h3>
+                  <p class="chat-panel-subtitle">Ask questions about this investigation, its financial evidence, and recommended next steps.</p>
+                </div>
+                <div class="chat-provenance-badge" id="chat-provenance-badge">
+                  <span class="chat-prov-dot"></span>
+                  <span class="chat-prov-label" id="chat-prov-label">Payvault Local Intelligence</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Suggested Questions -->
+            <div class="chat-suggested-section">
+              <span class="chat-suggested-label">Suggested questions</span>
+              <div class="chat-suggested-pills" id="chat-suggested-pills">
+                <!-- Populated dynamically with case-aware questions -->
+              </div>
+            </div>
+
+            <!-- Conversation Thread -->
+            <div class="chat-conversation" id="chat-conversation" role="log" aria-live="polite" aria-label="Investigation conversation">
+              <!-- Messages populated dynamically -->
+              <div class="chat-empty-state" id="chat-empty-state">
+                <p>No questions yet. Ask anything about this investigation.</p>
+              </div>
+            </div>
+
+            <!-- Input Row -->
+            <div class="chat-input-row">
+              <label for="chat-input" class="sr-only">Ask about this investigation</label>
+              <textarea
+                class="chat-input"
+                id="chat-input"
+                name="chat-message"
+                placeholder="Ask about this investigation…"
+                rows="1"
+                maxlength="1000"
+                autocomplete="off"
+                aria-label="Ask about this investigation"
+              ></textarea>
+              <button
+                class="chat-send-btn"
+                id="chat-send-btn"
+                type="button"
+                aria-label="Send question"
+                title="Send (Enter)"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
+            <div class="chat-input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line · Max 1000 characters</div>
+
+          </section><!-- /ask-payvault-ai-section -->
+
+        </div><!-- /active-case-container -->
+
+      </div><!-- /workstation master-detail -->
+
+    </section><!-- /page-investigations -->
+
+  </main>
+
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       RESOLUTION MODAL DIALOG (CHUNK 3 HUMAN DECISION)
+       ══════════════════════════════════════════════════════════════════════════ -->
+  <div class="modal-overlay-backdrop" id="resolution-modal" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="modal-resolve-title">
+    <div class="modal-dialog-box">
+      
+      <div class="modal-header-row">
+        <div>
+          <h2 class="modal-heading" id="modal-resolve-title">Resolve Settlement Exception</h2>
+          <p class="modal-subheading">Document the business justification for closing this discrepancy. AI provides investigation insights, but human operators make the authoritative resolution decision.</p>
+        </div>
+        <button class="btn-modal-close" onclick="closeResolutionModal()" type="button" aria-label="Close modal">✕</button>
+      </div>
+
+      <form id="resolve-form" onsubmit="handleResolveSubmit(event)">
+        
+        <div class="modal-body-content">
+          <label class="form-label">Select Business Justification Reason</label>
+          <div class="resolution-options-grid" id="resolution-reasons-grid">
+            <!-- Populated dynamically from /api/investigations/config/resolution-reasons -->
+          </div>
+
+          <div class="form-group" style="margin-top:1.25rem;">
+            <label class="form-label" for="resolve-notes">Operator Resolution Notes (Optional)</label>
+            <textarea id="resolve-notes" class="modal-textarea font-sans" rows="3" placeholder="Provide any additional context or reference numbers for this resolution..."></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer-row">
+          <button class="btn-secondary-action" onclick="closeResolutionModal()" type="button">Cancel</button>
+          <button class="btn-resolve-confirm" id="btn-submit-resolve" type="submit">Confirm & Mark as Resolved</button>
+        </div>
+
+      </form>
+
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-notification-container" id="toast-container"></div>
+
+  <script src="checkout.js?v=4"></script>
+</body>
+</html>

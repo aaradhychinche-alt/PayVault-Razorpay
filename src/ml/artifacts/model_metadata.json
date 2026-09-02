@@ -1,0 +1,108 @@
+{
+  "model_type": "RandomForestClassifier",
+  "model_version": "payvault-ml-v1",
+  "n_estimators": 150,
+  "max_depth": 12,
+  "random_state": 42,
+  "categories": [
+    "CLEAN_MATCH",
+    "PARTIAL_REFUND",
+    "TIMING_MISMATCH",
+    "FEE_TAX_VARIANCE",
+    "MISSING_ORDER",
+    "MISSING_PAYMENT",
+    "DUPLICATE",
+    "ADJUSTMENT",
+    "UNEXPLAINED"
+  ],
+  "feature_names": [
+    "amount_razorpay",
+    "amount_merchant",
+    "amount_variance",
+    "abs_amount_variance",
+    "gross_amount",
+    "fee_actual",
+    "fee_expected",
+    "fee_variance",
+    "abs_fee_variance",
+    "tax_actual",
+    "tax_expected",
+    "tax_variance",
+    "abs_tax_variance",
+    "amount_at_risk",
+    "fee_ratio",
+    "tax_fee_ratio",
+    "has_settlement_record",
+    "has_merchant_order",
+    "has_merchant_ledger",
+    "has_refund_records",
+    "refund_count",
+    "total_refund_amount",
+    "net_after_refunds",
+    "is_type_payment",
+    "is_type_refund",
+    "is_type_adjustment",
+    "missing_relationships_count",
+    "timeline_events_count",
+    "simulated_events_count",
+    "method_card",
+    "method_upi",
+    "method_netbanking",
+    "method_wallet",
+    "ledger_pending",
+    "ledger_settled",
+    "order_paid",
+    "order_pending",
+    "order_refunded"
+  ],
+  "top_features": [
+    {
+      "feature": "amount_at_risk",
+      "importance": 0.1337
+    },
+    {
+      "feature": "abs_amount_variance",
+      "importance": 0.0668
+    },
+    {
+      "feature": "timeline_events_count",
+      "importance": 0.0632
+    },
+    {
+      "feature": "amount_variance",
+      "importance": 0.0616
+    },
+    {
+      "feature": "abs_tax_variance",
+      "importance": 0.0501
+    },
+    {
+      "feature": "order_paid",
+      "importance": 0.0473
+    },
+    {
+      "feature": "abs_fee_variance",
+      "importance": 0.0461
+    },
+    {
+      "feature": "order_refunded",
+      "importance": 0.0459
+    },
+    {
+      "feature": "amount_merchant",
+      "importance": 0.0354
+    },
+    {
+      "feature": "missing_relationships_count",
+      "importance": 0.035
+    }
+  ],
+  "training_timestamp_utc": "2026-08-31T10:36:14.261565",
+  "total_dataset_size": 2370,
+  "train_samples": 1777,
+  "test_samples": 593,
+  "test_accuracy": 1.0,
+  "test_f1_score": 1.0,
+  "test_precision": 1.0,
+  "test_recall": 1.0
+}
