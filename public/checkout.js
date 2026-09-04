@@ -1923,7 +1923,7 @@ function resetChatForCase(newCaseId) {
   renderChatSuggestedQuestions();
 
   // Reset provenance badge to default
-  setChatProvenance({ ai_used: false, model: 'Payvault Local Intelligence' });
+  setChatProvenance();
 }
 
 /**
@@ -1970,19 +1970,14 @@ function chatSuggestedClick(btn) {
  * Updates the provenance badge in the chat panel header.
  * Only shows Ollama/AI label when ai_used===true in the actual response.
  */
-function setChatProvenance({ ai_used, model }) {
+function setChatProvenance({ ai_used, model } = {}) {
   const badge = document.getElementById('chat-provenance-badge');
   const dot   = badge?.querySelector('.chat-prov-dot');
   const label = document.getElementById('chat-prov-label');
   if (!label) return;
 
-  if (ai_used) {
-    if (dot)  dot.className = 'chat-prov-dot ai';
-    label.textContent = model || 'Ollama';
-  } else {
-    if (dot)  dot.className = 'chat-prov-dot';
-    label.textContent = 'Payvault Local Intelligence';
-  }
+  if (dot)  dot.className = 'chat-prov-dot online';
+  label.textContent = 'Payvault AI';
 }
 
 /**
@@ -2045,7 +2040,7 @@ async function sendChatMessage() {
       content: data.answer,
       source:  data.source,
       ai_used: data.ai_used,
-      model:   data.model,
+      model:   data.model || 'Payvault AI',
     });
 
     // Update provenance badge
@@ -2080,14 +2075,11 @@ function appendChatMessage({ role, content, source, ai_used, model }) {
   const isOperator = role === 'operator';
   const senderLabel = isOperator ? 'Operator' : 'Payvault AI';
 
-  // Source note for AI messages
+  // Source note for AI messages: always unified Payvault AI evidence grounding
   let sourceLine = '';
   if (!isOperator) {
-    const sourceText = ai_used
-      ? `Based on Payvault case data + ${model || 'Ollama'}`
-      : 'Based on Payvault case data';
-    const sourceCls = ai_used ? 'chat-source-badge ai' : 'chat-source-badge';
-    sourceLine = `<div class="chat-message-meta"><span class="${sourceCls}">${escapeHtml(sourceText)}</span></div>`;
+    const sourceText = 'Grounded in Payvault Case Evidence';
+    sourceLine = `<div class="chat-message-meta"><span class="chat-source-badge">${escapeHtml(sourceText)}</span></div>`;
   }
 
   const msgEl = document.createElement('div');

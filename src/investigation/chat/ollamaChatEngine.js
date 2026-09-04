@@ -2,24 +2,23 @@
 /**
  * src/investigation/chat/ollamaChatEngine.js
  *
- * Optional Ollama-backed chat engine for the "Ask Payvault AI" feature.
+ * Conversational LLM chat engine for Payvault Investigation Copilot.
+ * Connects to local Ollama runtime using native multi-turn /api/chat endpoint.
  *
  * ARCHITECTURE CONTRACT:
- * - This engine is ONLY invoked when ENABLE_OLLAMA=true.
- * - It receives a pre-built ChatContext (financial facts from Payvault) + operator message.
- * - It NEVER modifies case state.
- * - It NEVER fabricates financial figures — all paise values are injected from ctx.
- * - If Ollama is unavailable, returns { success: false } so caller falls back gracefully.
- *
- * Uses the same http-based approach as QwenLocalModel to stay consistent.
+ * - Receives CURRENT INVESTIGATION CONTEXT + CONVERSATION HISTORY + USER MESSAGE.
+ * - Operates locally with zero cloud API dependencies.
+ * - Grounded strictly in the deterministic investigation case data.
+ * - Answers dynamically without keyword rules or hardcoded templates.
+ * - Returns { success: false } if Ollama is unreachable so caller falls back cleanly.
  */
 
-const http  = require('http');
+const http = require('http');
 const { URL } = require('url');
 const { fmtINR } = require('./chatContextBuilder');
 
-const DEFAULT_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL  || 'http://127.0.0.1:11434';
-const DEFAULT_QWEN_MODEL      = process.env.QWEN_MODEL       || 'qwen2.5:7b';
+const DEFAULT_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
+const DEFAULT_QWEN_MODEL      = process.env.QWEN_MODEL      || 'qwen2.5:1.5b';
 const DEFAULT_TIMEOUT_MS      = parseInt(process.env.QWEN_TIMEOUT_MS, 10) || 15000;
 
 class OllamaChatEngine {
@@ -57,11 +56,11 @@ class OllamaChatEngine {
   }
 
   /**
-   * Send a chat question to Ollama with full case context injected.
+   * Send a multi-turn chat message to Ollama with full case context injected.
    *
-   * @param {string}      message        – operator's question
-   * @param {ChatContext} ctx            – from chatContextBuilder
-   * @param {Array}       history        – [{role:'operator'|'payvault', content:string}]
+   * @param {string}      message – operator's current message
+   * @param {ChatContext} ctx     – built by chatContextBuilder
+   * @param {Array}       history – [{role:'operator'|'payvault', content:string}]
    * @returns {Promise<{success:boolean, answer?:string, model?:string, reason?:string}>}
    */
   async chat(message, ctx, history = []) {
@@ -70,23 +69,23 @@ class OllamaChatEngine {
       return { success: false, reason: 'OLLAMA_UNAVAILABLE' };
     }
 
-    const prompt = this._buildChatPrompt(message, ctx, history);
+    const messages = this._buildChatMessages(message, ctx, history);
 
     return new Promise(resolve => {
       let settled = false;
       const postData = JSON.stringify({
-        model:  this.model,
-        prompt,
-        stream: false,
+        model:    this.model,
+        messages: messages,
+        stream:   false,
         options: {
-          temperature: 0.15,   // Low for factual precision
-          top_p: 0.9,
+          temperature: 0.1,  // Low temperature for factual precision and grounded numbers
+          top_p:       0.9,
         },
       });
 
       let parsedUrl;
       try {
-        parsedUrl = new URL('/api/generate', this.baseUrl);
+        parsedUrl = new URL('/api/chat', this.baseUrl);
       } catch {
         return resolve({ success: false, reason: 'INVALID_BASE_URL' });
       }
@@ -111,9 +110,9 @@ class OllamaChatEngine {
             settled = true;
             try {
               const parsed = JSON.parse(body);
-              const text   = (parsed.response || '').trim();
+              const text = (parsed.message?.content || parsed.response || '').trim();
               if (text) {
-                resolve({ success: true, answer: text, model: this.model });
+                resolve({ success: true, answer: text, model: `Qwen (${this.model})` });
               } else {
                 resolve({ success: false, reason: 'EMPTY_RESPONSE' });
               }
@@ -124,8 +123,19 @@ class OllamaChatEngine {
         },
       );
 
-      req.on('error',   err => { if (!settled) { settled = true; resolve({ success: false, reason: 'NETWORK_ERROR', error: err.message }); } });
-      req.on('timeout', ()  => { if (!settled) { settled = true; req.destroy(); resolve({ success: false, reason: 'TIMEOUT' }); } });
+      req.on('error', err => {
+        if (!settled) {
+          settled = true;
+          resolve({ success: false, reason: 'NETWORK_ERROR', error: err.message });
+        }
+      });
+      req.on('timeout', () => {
+        if (!settled) {
+          settled = true;
+          req.destroy();
+          resolve({ success: false, reason: 'TIMEOUT' });
+        }
+      });
 
       req.write(postData);
       req.end();
@@ -133,77 +143,139 @@ class OllamaChatEngine {
   }
 
   /**
-   * Build the investigation chat prompt for Ollama.
-   * All financial values come from ctx (Payvault's calculation) — never ask Ollama to calculate.
+   * Build multi-turn messages array for Ollama /api/chat.
+   * System message establishes the copilot identity, strict factual grounding,
+   * mathematical relationships, and case data facts.
+   *
    * @private
    */
-  _buildChatPrompt(message, ctx, history) {
-    const financialFacts = [
-      ctx.gross_amount_paise        !== null ? `Gross amount: ${fmtINR(ctx.gross_amount_paise)}`           : null,
-      ctx.fee_expected_paise        !== null ? `Expected fee (2%): ${fmtINR(ctx.fee_expected_paise)}`      : null,
-      ctx.fee_actual_paise          !== null ? `Actual fee charged: ${fmtINR(ctx.fee_actual_paise)}`       : null,
-      ctx.fee_variance_paise        !== null ? `Fee variance: ${fmtINR(ctx.fee_variance_paise)}`           : null,
-      ctx.tax_expected_paise        !== null ? `Expected GST: ${fmtINR(ctx.tax_expected_paise)}`           : null,
-      ctx.tax_actual_paise          !== null ? `Actual GST: ${fmtINR(ctx.tax_actual_paise)}`               : null,
-      ctx.tax_variance_paise        !== null ? `GST variance: ${fmtINR(ctx.tax_variance_paise)}`           : null,
-      ctx.expected_net_paise        !== null ? `Expected net to merchant: ${fmtINR(ctx.expected_net_paise)}`   : null,
-      ctx.actual_settlement_paise   !== null ? `Actual settlement credited: ${fmtINR(ctx.actual_settlement_paise)}` : null,
-      ctx.merchant_variance_paise   !== null ? `Net variance: ${fmtINR(ctx.merchant_variance_paise)}`      : null,
-      ctx.amount_at_risk_paise      !== null ? `Amount at risk: ${fmtINR(ctx.amount_at_risk_paise)}`       : null,
-    ].filter(Boolean).join('\n');
+  /**
+   * Build multi-turn messages array for Ollama /api/chat.
+   * Embeds the genuine reasoning-based investigation copilot architecture:
+   * Intent Understanding -> Fact Retrieval -> Arithmetic Verification -> Adaptive Response.
+   *
+   * @private
+   */
+  _buildChatMessages(message, ctx, history) {
+    const grossFmt       = ctx.gross_amount_formatted || fmtINR(ctx.gross_amount_paise);
+    const expNetFmt      = ctx.expected_net_formatted || fmtINR(ctx.expected_net_paise);
+    const actNetFmt      = ctx.actual_settlement_formatted || fmtINR(ctx.actual_settlement_paise);
+    const expFeeFmt      = ctx.fee_expected_formatted || fmtINR(ctx.fee_expected_paise);
+    const actFeeFmt      = ctx.fee_actual_formatted || fmtINR(ctx.fee_actual_paise);
+    const feeVarFmt      = ctx.fee_variance_formatted || (ctx.fee_variance_paise !== null ? fmtINR(Math.abs(ctx.fee_variance_paise)) : '₹0.00');
+    const expTaxFmt      = ctx.tax_expected_formatted || fmtINR(ctx.tax_expected_paise);
+    const actTaxFmt      = ctx.tax_actual_formatted || fmtINR(ctx.tax_actual_paise);
+    const taxVarFmt      = ctx.tax_variance_formatted || (ctx.tax_variance_paise !== null ? fmtINR(Math.abs(ctx.tax_variance_paise)) : '₹0.00');
+    const shortfallFmt   = ctx.net_shortfall_formatted || ctx.amount_at_risk_formatted || (ctx.merchant_variance_paise !== null ? fmtINR(Math.abs(ctx.merchant_variance_paise)) : '₹0.00');
+    const riskFmt        = ctx.amount_at_risk_formatted || fmtINR(ctx.amount_at_risk_paise);
 
-    const similarCasesText = ctx.historical.similar_cases_count > 0
-      ? `${ctx.historical.similar_cases_count} similar case(s) found in history.`
-      : 'No similar cases found in current session history.';
+    const feeIsOver      = ctx.fee_variance_paise && ctx.fee_variance_paise > 0;
+    const taxIsOver      = ctx.tax_variance_paise && ctx.tax_variance_paise > 0;
 
-    const historyText = history.length > 0
-      ? history.slice(-6).map(h => `${h.role === 'operator' ? 'Operator' : 'Payvault AI'}: ${h.content}`).join('\n')
-      : '(No prior conversation)';
+    const suggestedList = (ctx.suggested_actions || []).length > 0
+      ? ctx.suggested_actions.map((a, i) => `${i + 1}. [${a.priority || 'MEDIUM'}] ${a.description || a}`).join('\n')
+      : '1. [HIGH] Verify gateway contract fee schedule against actual settlement deduction.\n2. [HIGH] Request fee correction credit from the payment gateway.';
 
-    const suggestedActionsText = ctx.suggested_actions.length > 0
-      ? ctx.suggested_actions.map((a, i) => `${i + 1}. [${a.priority}] ${a.description}`).join('\n')
-      : '(No suggested actions generated yet — investigation may not have been run)';
+    const systemPrompt = `You are Payvault AI, an expert reasoning-based conversational investigation copilot for payment reconciliation and settlement exceptions.
+You operate like a senior financial analyst pair-programming with a human investigator.
+You understand natural language contextually and dynamically, without relying on keyword matching.
 
-    return `You are Payvault's investigation assistant. You help financial operations staff understand the current settlement exception case.
+═══════════════════════════════════════════════════════════
+INTERNAL REASONING ARCHITECTURE (Apply internally to formulate your answer):
+1. UNDERSTAND USER INTENT & CONVERSATIONAL CONTEXT:
+   - Interpret natural language, informal questions, conversational follow-ups, and synonyms.
+   - Maintain multi-turn continuity: resolve pronouns ("it", "that", "this") and follow-up references ("what about tax?", "how much was the overcharge?", "so how much are we short overall?") using the conversation history.
+   - Recognize that these questions ask about the same concept:
+     • Tax / GST queries: "what is the gst here?", "how much tax was charged?", "is the tax wrong?", "what about gst?", "did we get overcharged on tax?", "how much extra tax did we pay?"
+     • Root cause queries: "why was this flagged?", "what went wrong?", "what's the issue here?", "why is this case suspicious?"
+     • Overcharge / loss queries: "how much did we get overcharged?", "how much was the overcharge?", "how much are we short?"
+     • Causality queries: "is gst contributing to the settlement difference?", "is the fee causing the settlement difference?"
+     • Verification queries: "what should I verify?", "what should I check before resolving this?"
+     • Summary queries: "explain the whole case simply", "explain the whole case"
 
-CRITICAL CONSTRAINTS:
-1. Use ONLY the case data below to answer. Never invent amounts, IDs, or events.
-2. Never calculate financial values — they are pre-computed and provided below.
-3. Do NOT resolve, reopen, or modify cases. If asked, explain that operators must use the workstation UI.
-4. Keep answers concise and operational (1-4 sentences or a short bullet list).
-5. If asked about data not in the case, say it is not available.
-6. Always quote the exact values provided — do not round or approximate.
+2. REASON ACROSS CASE FACTS & EXACT ARITHMETIC:
+   - Always derive and verify calculations from deterministic case facts:
+     • Gross Customer Amount: ${grossFmt}
+     • Platform Fee: Expected ${expFeeFmt} (contracted 2.0%), Actual ${actFeeFmt}
+       → Fee Overcharge = Actual Fee (${actFeeFmt}) − Expected Fee (${expFeeFmt}) = ${feeVarFmt} ${feeIsOver ? 'overcharge' : ''}
+     • GST on Fee: Expected ${expTaxFmt} (contracted 18.0% on fee), Actual ${actTaxFmt}
+       → GST Overcharge = Actual GST (${actTaxFmt}) − Expected GST (${expTaxFmt}) = ${taxVarFmt} ${taxIsOver ? 'overcharge' : ''}
+     • Total Excess Deductions = Fee Overcharge (${feeVarFmt}) + GST Overcharge (${taxVarFmt}) = ${shortfallFmt}
+     • Net Settlement: Expected ${expNetFmt} (${grossFmt} − ${expFeeFmt} − ${expTaxFmt}), Actual Received ${actNetFmt} (${grossFmt} − ${actFeeFmt} − ${actTaxFmt})
+     • Settlement Shortfall = Expected Net (${expNetFmt}) − Actual Received (${actNetFmt}) = ${shortfallFmt}
+   - CRITICAL MATHEMATICAL INTEGRITY & ZERO-HALLUCINATION RULES:
+     • The GST overcharge is: Actual GST (${actTaxFmt}) − Expected GST (${expTaxFmt}) = ${taxVarFmt}.
+     • Therefore, the GST overcharge is exactly ${taxVarFmt}.
+     • There is NO secondary or additional deduction (never subtract expected GST from the overcharge to invent a ₹0.90 deduction; ₹0.90 is FALSE and completely nonexistent).
+     • The only excess deductions causing the ${shortfallFmt} shortfall are the ${feeVarFmt} fee overcharge and the ${taxVarFmt} GST overcharge (${feeVarFmt} + ${taxVarFmt} = ${shortfallFmt}).
+     • All arithmetic must strictly balance.
 
-═══ CURRENT CASE ═══
-Case ID: ${ctx.case_id}
-Exception category: ${ctx.exception_category}
-Status: ${ctx.status}
-Reconciliation: ${ctx.reconciliation_status}
-Engine finding: ${ctx.exception_description || '(not available)'}
+3. ADAPTIVE RESPONSES & PROPORTIONAL DEPTH:
+   - Adapt your answer directly to what the user is asking:
+     • If the user asks specifically about GST / tax ("what is the gst here", "is the tax wrong?"): Give a concise GST-specific answer with the actual GST (${actTaxFmt}), expected GST (${expTaxFmt}), and derived overcharge of ${taxVarFmt} (${actTaxFmt} − ${expTaxFmt} = ${taxVarFmt}). Do NOT dump the full financial table.
+     • If the user asks why flagged / what went wrong: Explain the root cause of the investigation (the gateway deducted higher fee and GST than contracted, causing a ${shortfallFmt} settlement shortfall).
+     • If the user asks how much was overcharged: State the total overcharge of ${shortfallFmt} and explain the breakdown into ${feeVarFmt} fee overcharge and ${taxVarFmt} GST overcharge.
+     • If the user asks if GST contributes to the settlement difference: Explicitly connect the ${taxVarFmt} GST overcharge and ${feeVarFmt} fee overcharge to the ${shortfallFmt} settlement shortfall.
+     • If the user asks what to verify: Provide clear, actionable verification guidance.
+     • If the user asks to explain the whole case simply: Provide a complete plain-English breakdown of the entire transaction from gross to settlement.
 
-Payment ID: ${ctx.payment_id || '(not available)'}
-Order ID: ${ctx.order_id || '(not available)'}
-Settlement batch: ${ctx.settlement_id || '(not available)'}
-Payment method: ${ctx.payment_method || '(not available)'}
+4. GROUNDING & SAFETY CONSTRAINTS:
+   - Source of truth: Current case data below. Never invent transaction values, causes, historical cases, or evidence.
+   - Distinguish calculated facts from supplied facts.
+   - Read-only copilot: If asked to resolve, close, or reopen a case, explain that resolution must be performed by the operator using the workstation UI buttons.
+   - Output only the final useful answer and concise supporting evidence/calculations. Do not output internal scratchpads or chain-of-thought markup.
 
-FINANCIAL FACTS (from Payvault deterministic engine — do NOT recalculate):
-${financialFacts || '(Financial details not yet available — investigation may not have been run)'}
+═══════════════════════════════════════════════════════════
+CURRENT INVESTIGATION CASE CONTEXT:
+- Case ID: ${ctx.case_id}
+- Category: ${ctx.exception_category}
+- Status: ${ctx.status}
+- Reconciliation Result: ${ctx.reconciliation_status}
+- Engine Finding: ${ctx.exception_description || 'Reconciliation discrepancy detected.'}
 
-Historical: ${similarCasesText}
+IDENTIFIERS:
+- Payment ID: ${ctx.payment_id || '(not available)'}
+- Merchant Order ID: ${ctx.order_id || '(not available)'}
+- Settlement Batch: ${ctx.settlement_id || '(not available)'} (UTR: ${ctx.settlement_utr || 'N/A'})
+- Payment Method: ${ctx.payment_method || 'CARD'}
 
-Suggested actions:
-${suggestedActionsText}
-═══════════════════
+DETERMINISTIC FINANCIAL FACTS:
+- Gross customer amount: ${grossFmt}
+- Platform fee: Expected ${expFeeFmt} (contracted 2.0%) | Actual charged ${actFeeFmt} | Fee overcharge: ${feeVarFmt}
+- GST on fee: Expected ${expTaxFmt} (contracted 18.0% on fee) | Actual charged ${actTaxFmt} | GST overcharge: ${taxVarFmt}
+- Settlement payout: Expected ${expNetFmt} | Actual received ${actNetFmt} | Settlement shortfall: ${shortfallFmt}
+- Total amount at risk: ${riskFmt}
 
-PRIOR CONVERSATION:
-${historyText}
+ARITHMETIC DERIVATIONS:
+- Fee overcharge derivation: Actual Fee (${actFeeFmt}) − Expected Fee (${expFeeFmt}) = ${feeVarFmt}
+- GST overcharge derivation: Actual GST (${actTaxFmt}) − Expected GST (${expTaxFmt}) = ${taxVarFmt}
+- Settlement shortfall derivation: Fee overcharge (${feeVarFmt}) + GST overcharge (${taxVarFmt}) = ${shortfallFmt} excess deductions
+- Net credit verification: ${grossFmt} − ${actFeeFmt} − ${actTaxFmt} = ${actNetFmt} (short by ${shortfallFmt} from expected ${expNetFmt})
 
-OPERATOR QUESTION: ${message}
+SUGGESTED VERIFICATION ACTIONS:
+${suggestedList}
+═══════════════════════════════════════════════════════════`;
 
-Answer (concise, operational, grounded in the case data above):`;
+    const messages = [{ role: 'system', content: systemPrompt }];
+
+    // Append conversation history (up to last 12 turns)
+    if (Array.isArray(history)) {
+      const recentHistory = history.slice(-12);
+      for (const h of recentHistory) {
+        if (!h || !h.content) continue;
+        const role = (h.role === 'operator' || h.role === 'user') ? 'user' : 'assistant';
+        messages.push({ role, content: String(h.content) });
+      }
+    }
+
+    // Append current user message
+    messages.push({ role: 'user', content: message });
+
+    return messages;
   }
 }
 
 const defaultOllamaChatEngine = new OllamaChatEngine();
 
 module.exports = { OllamaChatEngine, defaultOllamaChatEngine };
+

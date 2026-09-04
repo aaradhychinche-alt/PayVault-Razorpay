@@ -27,6 +27,7 @@ const { buildIntelligenceContext }  = require('../investigation/intelligence/con
 const { buildChatContext }          = require('../investigation/chat/chatContextBuilder');
 const { generateLocalAnswer }       = require('../investigation/chat/localChatEngine');
 const { defaultOllamaChatEngine }   = require('../investigation/chat/ollamaChatEngine');
+const { routeAndAnswerChat }        = require('../investigation/chat/chatRouter');
 const {
   CaseStatus,
   ResolutionReason,
@@ -439,63 +440,25 @@ router.post('/:id/chat', async (req, res) => {
       savedAi,
     });
 
-    // ── Route to answer engine ─────────────────────────────────────────────
-    const ollamaEnabled = (
-      process.env.ENABLE_OLLAMA    === 'true' ||
-      process.env.AI_QWEN_ENABLED  === 'true'
-    );
-
-    let answer   = null;
-    let aiUsed   = false;
-    let model    = 'Payvault Local Intelligence';
-    let source   = 'payvault_local';
-    let intent   = 'unknown';
-
-    // ── Try Ollama first if explicitly enabled ─────────────────────────────
-    if (ollamaEnabled) {
-      console.log(`[Chat] ENABLE_OLLAMA=true — attempting Ollama for case ${id}`);
-      try {
-        const ollamaResult = await defaultOllamaChatEngine.chat(
-          message.trim(),
-          ctx,
-          history,
-        );
-
-        if (ollamaResult.success && ollamaResult.answer) {
-          answer  = ollamaResult.answer;
-          aiUsed  = true;
-          model   = ollamaResult.model || defaultOllamaChatEngine.model;
-          source  = 'payvault_local+ollama';
-          intent  = 'ollama_response';
-          console.log(`[Chat] Ollama answered for case ${id} (model: ${model})`);
-        } else {
-          console.log(`[Chat] Ollama unavailable/failed (${ollamaResult.reason}). Falling back to Payvault Local Intelligence.`);
-        }
-      } catch (ollamaErr) {
-        console.log(`[Chat] Ollama error: ${ollamaErr.message}. Falling back.`);
-      }
-    }
-
-    // ── Fall back (or default) to Payvault Local Intelligence ─────────────
-    if (!answer) {
-      const localResult = generateLocalAnswer(message.trim(), ctx);
-      answer = localResult.answer;
-      intent = localResult.intent;
-      aiUsed = false;
-      model  = 'Payvault Local Intelligence';
-      source = 'payvault_local';
-      if (!ollamaEnabled) {
-        console.log(`[Chat] ENABLE_OLLAMA=false — using Payvault Local Intelligence for case ${id} (intent: ${intent})`);
-      }
-    }
+    // ── Execute Payvault AI Hybrid Copilot ─────────────────────────────────
+    // Payvault AI Core is the primary controller. Straightforward queries are
+    // answered directly with high confidence. Complex queries request internal
+    // assistance from the local model, followed by validation.
+    const chatResult = await routeAndAnswerChat({
+      message: message.trim(),
+      ctx,
+      history,
+    });
 
     return res.json({
-      answer,
-      source,
-      case_id:  id,
-      ai_used:  aiUsed,
-      model,
-      intent,
+      answer:         chatResult.answer,
+      source:         chatResult.source,
+      case_id:        id,
+      ai_used:        chatResult.execution_mode === 'HYBRID_ASSISTED',
+      model:          'Payvault AI',
+      execution_mode: chatResult.execution_mode,
+      intent:         chatResult.intent,
+      confidence:     chatResult.confidence,
     });
 
   } catch (err) {

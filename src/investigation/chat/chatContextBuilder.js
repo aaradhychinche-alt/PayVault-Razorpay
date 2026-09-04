@@ -90,6 +90,53 @@ function buildChatContext({ investigationCase, lifecycle, intelligenceContext, s
     merchant_variance_paise:   fa.merchant_variance         ?? null,
     amount_at_risk_paise:      c.amount_at_risk             ?? null,
 
+    // ── Pre-formatted display values & computed variances ─────────────────
+    gross_amount_formatted:        fmtINR(fa.gross_amount ?? null),
+    expected_net_formatted:        fmtINR(fa.expected_merchant_amount ?? null),
+    actual_settlement_formatted:   fmtINR(fa.settlement_credit ?? null),
+    fee_expected_formatted:        fmtINR(fa.fee_expected ?? null),
+    fee_actual_formatted:          fmtINR(fa.fee_actual ?? null),
+    fee_variance_formatted:        fa.fee_variance !== null && fa.fee_variance !== undefined ? fmtINR(Math.abs(fa.fee_variance)) : null,
+    fee_overcharge_paise:          (fa.fee_variance && fa.fee_variance > 0) ? fa.fee_variance : 0,
+    fee_is_overcharged:            Boolean(fa.fee_variance && fa.fee_variance > 0),
+    tax_expected_formatted:        fmtINR(fa.tax_expected ?? null),
+    tax_actual_formatted:          fmtINR(fa.tax_actual ?? null),
+    tax_variance_formatted:        fa.tax_variance !== null && fa.tax_variance !== undefined ? fmtINR(Math.abs(fa.tax_variance)) : null,
+    tax_overcharge_paise:          (fa.tax_variance && fa.tax_variance > 0) ? fa.tax_variance : 0,
+    tax_is_overcharged:            Boolean(fa.tax_variance && fa.tax_variance > 0),
+    net_shortfall_paise:           (fa.merchant_variance && fa.merchant_variance < 0) ? Math.abs(fa.merchant_variance) : 0,
+    net_shortfall_formatted:       fa.merchant_variance !== null && fa.merchant_variance !== undefined ? fmtINR(Math.abs(fa.merchant_variance)) : null,
+    amount_at_risk_formatted:      fmtINR(c.amount_at_risk ?? null),
+
+    // ── Exact Arithmetic Derivations & Algebraic Identities ────────────────
+    total_excess_deductions_paise:     Math.max(0, (fa.fee_variance || 0)) + Math.max(0, (fa.tax_variance || 0)),
+    total_excess_deductions_formatted: fmtINR(Math.max(0, (fa.fee_variance || 0)) + Math.max(0, (fa.tax_variance || 0))),
+    fee_derivation_text:               fa.fee_expected !== null && fa.fee_actual !== null
+      ? `Actual Fee (${fmtINR(fa.fee_actual)}) − Expected Fee (${fmtINR(fa.fee_expected)}) = ${fmtINR(Math.abs(fa.fee_variance || 0))} ${fa.fee_variance > 0 ? 'overcharge' : 'undercharge'}`
+      : null,
+    tax_derivation_text:               fa.tax_expected !== null && fa.tax_actual !== null
+      ? `Actual GST (${fmtINR(fa.tax_actual)}) − Expected GST (${fmtINR(fa.tax_expected)}) = ${fmtINR(Math.abs(fa.tax_variance || 0))} ${fa.tax_variance > 0 ? 'overcharge' : 'undercharge'}`
+      : null,
+    settlement_derivation_text:        fa.expected_merchant_amount !== null && fa.settlement_credit !== null
+      ? `Expected Net (${fmtINR(fa.expected_merchant_amount)}) − Actual Settlement (${fmtINR(fa.settlement_credit)}) = ${fmtINR(Math.abs(fa.merchant_variance || 0))} shortfall`
+      : null,
+
+    // ── Cause-and-effect relationship description ─────────────────────────
+    cause_and_effect_summary:      generateCauseAndEffect({
+      category: c.exception_category,
+      grossPaise: fa.gross_amount,
+      feeExpectedPaise: fa.fee_expected,
+      feeActualPaise: fa.fee_actual,
+      feeVarPaise: fa.fee_variance,
+      taxExpectedPaise: fa.tax_expected,
+      taxActualPaise: fa.tax_actual,
+      taxVarPaise: fa.tax_variance,
+      expNetPaise: fa.expected_merchant_amount,
+      actNetPaise: fa.settlement_credit,
+      merchVarPaise: fa.merchant_variance,
+      riskPaise: c.amount_at_risk,
+    }),
+
     // ── Reconciliation status ─────────────────────────────────────────────
     reconciliation_status:  rr.status   || 'UNKNOWN',
     exception_description:  c.exception?.description || rr.reason || null,
@@ -125,6 +172,37 @@ function buildChatContext({ investigationCase, lifecycle, intelligenceContext, s
 }
 
 /**
+ * Generate clear deterministic cause-and-effect relationship text.
+ */
+function generateCauseAndEffect({
+  category, grossPaise, feeExpectedPaise, feeActualPaise, feeVarPaise,
+  taxExpectedPaise, taxActualPaise, taxVarPaise, expNetPaise, actNetPaise,
+  merchVarPaise, riskPaise
+}) {
+  if (category === 'FEE_TAX_VARIANCE' && feeVarPaise && taxVarPaise) {
+    const feeOver = fmtINR(Math.abs(feeVarPaise));
+    const taxOver = fmtINR(Math.abs(taxVarPaise));
+    const totalShort = fmtINR(Math.abs(merchVarPaise || riskPaise || (feeVarPaise + taxVarPaise)));
+    const expNet = fmtINR(expNetPaise);
+    const actNet = fmtINR(actNetPaise);
+    return `Net settlement is calculated as Gross Amount minus Fee minus GST. The gateway overcharged the fee by ${feeOver} and overcharged GST by ${taxOver}, which sum to ${totalShort} in excess deductions. This directly causes the settlement credit to be short by ${totalShort} (${actNet} received vs ${expNet} expected).`;
+  }
+  if (category === 'TIMING_MISMATCH') {
+    return `The payment capture and its corresponding refund/credit occurred in different settlement batch cycles, resulting in a temporary cross-period discrepancy between the ledger and the gateway settlement batch.`;
+  }
+  if (category === 'MISSING_ORDER') {
+    return `A settlement credit was received into the bank nodal account from the gateway, but no merchant order record could be matched to the transaction entity.`;
+  }
+  if (category === 'MISSING_PAYMENT') {
+    return `A merchant order was authorized and expected in the ledger, but no matching settlement payout record has been received from the payment gateway.`;
+  }
+  if (category === 'DUPLICATE') {
+    return `Multiple settlement credits with identical amounts were posted for the same order reference, leading to duplicate credit exposure that requires reversal.`;
+  }
+  return `Reconciliation discrepancy of ${fmtINR(riskPaise || merchVarPaise)} detected between the gateway settlement record and the merchant ledger.`;
+}
+
+/**
  * Format a paise value to an INR string.
  * Used inside answer templates — keeps monetary formatting in the backend.
  *
@@ -137,4 +215,5 @@ function fmtINR(paise) {
   return `₹${rupees.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-module.exports = { buildChatContext, fmtINR };
+module.exports = { buildChatContext, fmtINR, generateCauseAndEffect };
+
