@@ -13,21 +13,11 @@
  *         ↓
  *  Multi-Signal Difficulty & Ambiguity Evaluation (difficulty.js)
  *         ↓
- *       ┌───────────────────────────────┐
- *       │ Is this case reliable enough? │
- *       └───────────────┬───────────────┘
- *                       │
- *              YES      │      NO
- *               ↓       │       ↓
- *        Payvault ML    │   Local Qwen (Ollama)
- *               │       │       │
- *               └───────┴───────┘
- *                       ↓
- *              Unified Investigation
- *                       ↓
- *              Consistency Validation (consistency.js)
- *                       ↓
- *              User-Friendly Unified Report
+ *  Unified Investigation
+ *         ↓
+ *  Consistency Validation (consistency.js)
+ *         ↓
+ *  User-Friendly Unified Report
  */
 
 const { extractEvidence }     = require('./evidence');
@@ -43,10 +33,10 @@ class AIOrchestrator {
   }
 
   /**
-   * Orchestrates the complete end-to-end investigation for a case.
+   * Run the end-to-end investigation pipeline on an InvestigationCase.
    *
-   * @param {Object} investigationCase - Built deterministically by caseBuilder
-   * @param {Object} [options]         - Execution options
+   * @param {Object} investigationCase - Standard InvestigationCase
+   * @param {Object} [options]         - Orchestration overrides
    * @returns {Promise<Object>} Unified user-facing investigation report
    */
   async orchestrate(investigationCase, options = {}) {
@@ -58,30 +48,11 @@ class AIOrchestrator {
     // ── 2. Detect Deterministic Patterns ─────────────────────────────────────
     const patterns = detectPatterns(investigationCase, evidence);
 
-    // ── 3. Route Through Model Router (Local ML vs Local Qwen Escalation) ────
+    // ── 3. Route Through Model Router (Payvault Local ML) ────────────────────
     const routing = await this.router.route(investigationCase, options);
 
     // ── 4. Formulate Deterministic Reasoning & Root Causes ───────────────────
     let reasoning = reasonOverCase(investigationCase, evidence, patterns);
-
-    // If local Qwen provided a valid escalated analysis, merge its refined reasoning
-    if (routing.qwen_result && routing.qwen_result.success && routing.qwen_result.analysis) {
-      const qa = routing.qwen_result.analysis;
-      if (qa.what_happened) {
-        reasoning.primary_root_cause.cause = qa.what_happened;
-      }
-      if (qa.recommended_action) {
-        reasoning.recommended_actions = [
-          {
-            action_type: 'ESCALATED_RECOMMENDATION',
-            priority: 'HIGH',
-            description: qa.recommended_action,
-            resolution_hint: qa.recommended_action,
-          },
-          ...(reasoning.recommended_actions || []),
-        ];
-      }
-    }
 
     // ── 5. Calculate Measurable Confidence Scoring ───────────────────────────
     let confidence = calculateConfidence({
@@ -204,7 +175,6 @@ class AIOrchestrator {
         difficulty_score: routing.difficulty.difficultyScore,
         difficulty_reasons: routing.difficulty.reasons,
         ml_analysis: routing.ml_result,
-        qwen_escalated: !!routing.qwen_result,
         latency_ms: latencyMs,
         is_consistent: validation.isValid,
       },
@@ -212,10 +182,6 @@ class AIOrchestrator {
   }
 
   _buildWhatHappened(cat, caseData, reasoning, routing) {
-    if (routing.qwen_result?.analysis?.what_happened) {
-      return routing.qwen_result.analysis.what_happened;
-    }
-
     const amtStr = `₹${((caseData.amount_at_risk || 0) / 100).toFixed(2)}`;
     switch (cat) {
       case 'ADJUSTMENT':
@@ -261,10 +227,6 @@ class AIOrchestrator {
   }
 
   _buildRecommendedAction(cat, reasoning, routing) {
-    if (routing.qwen_result?.analysis?.recommended_action) {
-      return routing.qwen_result.analysis.recommended_action;
-    }
-
     const firstAction = reasoning.recommended_actions?.[0];
     if (firstAction?.resolution_hint || firstAction?.description) {
       return firstAction.resolution_hint || firstAction.description;

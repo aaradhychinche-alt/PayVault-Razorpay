@@ -754,6 +754,7 @@
               <div class="case-header-top">
                 <div class="case-title-group">
                   <div class="case-badges-row">
+                    <span class="priority-badge font-mono" id="view-priority-badge">HIGH</span>
                     <span class="case-cat-badge font-mono" id="view-category-badge">FEE_TAX_VARIANCE</span>
                     <span class="case-status-badge font-mono" id="view-user-status-pill">OPEN</span>
                     <span class="case-id-text font-mono" id="view-case-id">exc_000001</span>
@@ -796,31 +797,6 @@
                 </button>
               </div>
 
-            </div>
-
-            <!-- Resolution Summary Banner (Shown for RESOLVED cases) -->
-            <div class="resolution-banner-card" id="resolution-summary-card" style="display:none;">
-              <div class="res-banner-header">
-                <div class="res-check-icon">✓</div>
-                <div class="res-banner-title-col">
-                  <div class="res-banner-title">Case Marked as Resolved by Operator</div>
-                  <div class="res-banner-time" id="view-resolution-time">Resolved on Aug 30, 2026</div>
-                </div>
-              </div>
-              <div class="res-banner-body">
-                <div class="res-field-item">
-                  <span class="res-field-tag">Resolution Reason</span>
-                  <span class="res-field-val font-mono" id="view-resolution-reason">—</span>
-                </div>
-                <div class="res-field-item full">
-                  <span class="res-field-tag">Operator Notes</span>
-                  <p class="res-notes-p" id="view-resolution-notes">—</p>
-                </div>
-                <div class="res-field-item">
-                  <span class="res-field-tag">Audited By</span>
-                  <span class="res-field-val font-mono" id="view-resolution-actor">operator</span>
-                </div>
-              </div>
             </div>
 
             <!-- Inline Investigation Progress Component (Clean, Non-blocking, Connected) -->
@@ -899,62 +875,161 @@
               </div>
             </div>
 
-            <!-- Core Investigation Findings (The 3 Questions) -->
-            <div class="investigation-core-card" id="finding-hero-card">
+            <!-- ══════════════════════════════════════════════════════════════════
+                 A. INVESTIGATION SUMMARY — TOPMOST
+                 ══════════════════════════════════════════════════════════════════ -->
+            <div class="investigation-core-card" id="finding-hero-card" tabindex="-1" aria-label="Investigation Summary Report">
               
-              <!-- Section 1: What Happened? -->
-              <div class="finding-section">
-                <div class="finding-section-header">
-                  <span class="finding-q-badge">1</span>
-                  <h2 class="finding-q-title">What happened?</h2>
+              <div class="investigation-result-header">
+                <div class="investigation-result-title-row">
+                  <span class="investigation-result-badge font-mono">INVESTIGATION RESULT</span>
+                  <span class="investigation-result-sub font-mono">Grounded Causal Synthesis</span>
                 </div>
-                <p class="finding-statement-text" id="finding-statement-text">
-                  The settlement credit contains an unexplained financial variance that does not match the expected merchant ledger calculation.
-                </p>
               </div>
 
-              <!-- Section 2: Why Does It Matter? -->
-              <div class="finding-section">
-                <div class="finding-section-header">
-                  <span class="finding-q-badge">2</span>
-                  <h2 class="finding-q-title">Why does it matter?</h2>
+              <!-- Dynamic Investigation Results Container -->
+              <div id="investigation-results-container" style="display: none;">
+                <!-- Section 1: What Happened? -->
+                <div class="finding-section">
+                  <div class="finding-section-header">
+                    <span class="finding-q-badge">1</span>
+                    <h2 class="finding-q-title">What happened?</h2>
+                  </div>
+                  <p class="finding-statement-text" id="finding-statement-text"></p>
                 </div>
-                <p class="finding-impact-text" id="finding-impact-text">
-                  Discrepancies in gateway deductions or timing create balance sheet variances across reporting periods.
-                </p>
+
+                <!-- Section 2: Why Does It Matter? -->
+                <div class="finding-section">
+                  <div class="finding-section-header">
+                    <span class="finding-q-badge">2</span>
+                    <h2 class="finding-q-title">Why does it matter?</h2>
+                  </div>
+                  <p class="finding-impact-text" id="finding-impact-text"></p>
+                </div>
+
+                <!-- Section 3: What Should I Do? -->
+                <div class="finding-section">
+                  <div class="finding-section-header">
+                    <span class="finding-q-badge">3</span>
+                    <h2 class="finding-q-title">What should I do?</h2>
+                  </div>
+                  <ol class="action-steps-list" id="finding-actions-list">
+                  </ol>
+                </div>
               </div>
 
-              <!-- Section 3: What Should I Do? -->
-              <div class="finding-section">
-                <div class="finding-section-header">
-                  <span class="finding-q-badge">3</span>
-                  <h2 class="finding-q-title">What should I do?</h2>
-                </div>
-                <ol class="action-steps-list" id="finding-actions-list">
-                  <li class="action-step-item">
-                    <span class="step-badge">1</span>
-                    <span class="step-desc">Verify settlement statement against nodal bank credit records.</span>
-                  </li>
-                </ol>
-              </div>
-
-              <!-- Key Evidence Chips Row -->
+              <!-- Auditable Transaction Facts Card Grid -->
               <div class="evidence-chips-section">
-                <span class="evidence-chips-title">Auditable Transaction Facts:</span>
+                <div class="facts-section-header">
+                  <span class="evidence-chips-title">Auditable Transaction Facts</span>
+                  <span class="facts-deterministic-tag font-mono">Deterministic Integer-Paise Precision</span>
+                </div>
                 <div class="evidence-chips-grid" id="finding-evidence-chips">
-                  <!-- Dynamically populated fact chips -->
+                  <!-- Dynamically populated 4 fact cards -->
                 </div>
               </div>
 
             </div>
 
-            <!-- Visual Lifecycle Timeline -->
-            <div class="visual-timeline-card">
-              <h3 class="accordion-header-title">Visual Transaction Lifecycle</h3>
-              <div class="visual-timeline-steps" id="case-visual-timeline">
-                <!-- Dynamically populated visual timeline -->
+            <!-- ══════════════════════════════════════════════════════════════════
+                 B. INVESTIGATION LIFECYCLE TIMELINE — SECOND
+                 ══════════════════════════════════════════════════════════════════ -->
+            <section class="investigation-lifecycle-section" id="investigation-timeline-section" aria-label="Investigation Lifecycle Timeline">
+              <div class="timeline-section-header">
+                <div class="timeline-title-group">
+                  <span class="timeline-icon">⏳</span>
+                  <h3 class="timeline-section-title">Investigation Lifecycle Timeline</h3>
+                </div>
+                <span class="timeline-subtitle-hint font-mono">Evidence-Grounded Trail</span>
               </div>
-            </div>
+              <div class="lifecycle-timeline-track" id="case-visual-timeline">
+                <!-- Dynamically populated lifecycle nodes -->
+              </div>
+            </section>
+
+            <!-- ══════════════════════════════════════════════════════════════════
+                 C. FINANCIAL IMPACT SUMMARY & INVESTIGATION DETAILS
+                 ══════════════════════════════════════════════════════════════════ -->
+            <section class="financial-impact-section" id="financial-impact-section" aria-label="Financial Impact Summary">
+              <div class="impact-section-header">
+                <div class="impact-title-group">
+                  <span class="impact-icon">₹</span>
+                  <h2 class="impact-section-title">Financial Impact Summary</h2>
+                </div>
+                <span class="impact-badge font-mono">Integer-Paise Engine</span>
+              </div>
+
+              <div class="impact-cards-grid">
+                <!-- Settlement Shortfall Hero Box -->
+                <div class="impact-hero-card">
+                  <div class="impact-hero-label">Settlement Shortfall</div>
+                  <div class="impact-hero-value font-mono" id="impact-settlement-shortfall">₹0.00</div>
+                  <div class="impact-hero-sub" id="impact-shortfall-sub">Discrepancy between expected and credited payout</div>
+                </div>
+
+                <!-- Settlement Comparison Grid -->
+                <div class="impact-metrics-grid">
+                  <div class="impact-metric-box">
+                    <span class="impact-metric-label">Gross Payment</span>
+                    <span class="impact-metric-value font-mono" id="impact-gross-payment">₹0.00</span>
+                  </div>
+                  <div class="impact-metric-box">
+                    <span class="impact-metric-label">Expected Settlement</span>
+                    <span class="impact-metric-value font-mono" id="impact-expected-settlement">₹0.00</span>
+                  </div>
+                  <div class="impact-metric-box">
+                    <span class="impact-metric-label">Actual Settlement</span>
+                    <span class="impact-metric-value font-mono" id="impact-actual-settlement">₹0.00</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Gateway Deductions & Variance Breakdown (Fee / Tax Details) -->
+              <div class="impact-deductions-container" id="impact-deductions-container">
+                <div class="impact-deductions-header">
+                  <span class="impact-deductions-title">Gateway Fee & GST Tax Breakdown</span>
+                </div>
+                <div class="impact-deductions-grid">
+                  <div class="deduction-row-card">
+                    <div class="deduction-label-col">
+                      <strong>Platform Gateway Fee</strong>
+                      <span>Contract rate 2.0%</span>
+                    </div>
+                    <div class="deduction-val-col">
+                      <span class="val-sub">Expected</span>
+                      <span class="val-num font-mono" id="impact-expected-fee">₹0.00</span>
+                    </div>
+                    <div class="deduction-val-col">
+                      <span class="val-sub">Actual Charged</span>
+                      <span class="val-num font-mono" id="impact-actual-fee">₹0.00</span>
+                    </div>
+                    <div class="deduction-val-col">
+                      <span class="val-sub">Fee Variance</span>
+                      <span class="val-num font-mono text-danger" id="impact-fee-variance">₹0.00</span>
+                    </div>
+                  </div>
+
+                  <div class="deduction-row-card">
+                    <div class="deduction-label-col">
+                      <strong>GST on Fee (18%)</strong>
+                      <span>Statutory tax deduction</span>
+                    </div>
+                    <div class="deduction-val-col">
+                      <span class="val-sub">Expected</span>
+                      <span class="val-num font-mono" id="impact-expected-tax">₹0.00</span>
+                    </div>
+                    <div class="deduction-val-col">
+                      <span class="val-sub">Actual Charged</span>
+                      <span class="val-num font-mono" id="impact-actual-tax">₹0.00</span>
+                    </div>
+                    <div class="deduction-val-col">
+                      <span class="val-sub">GST Variance</span>
+                      <span class="val-num font-mono text-danger" id="impact-tax-variance">₹0.00</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
 
             <!-- Progressive Disclosure Accordions -->
             <div class="accordion-group">
@@ -1024,78 +1099,164 @@
 
             </div><!-- /accordions -->
 
-          </div><!-- /investigation-findings-panel or similar -->
+            <!-- ══════════════════════════════════════════════════════════════════
+                 D. EVIDENCE — Authoritative Grounding
+                 ══════════════════════════════════════════════════════════════════ -->
+            <section class="case-evidence-section" id="case-evidence-panel" aria-label="Investigation Evidence">
+              <div class="evidence-panel-header">
+                <div class="evidence-title-group">
+                  <span class="evidence-icon">📋</span>
+                  <div>
+                    <h3 class="evidence-panel-title">Case Evidence</h3>
+                    <p class="evidence-panel-subtitle">Authoritative ledger & settlement artifacts grounding Payvault AI investigation</p>
+                  </div>
+                </div>
+                <span class="evidence-count-badge font-mono" id="evidence-source-count">5 Evidence Sources</span>
+              </div>
 
-          <!-- ══════════════════════════════════════════════════════════════════
-               ASK PAYVAULT AI — Case-Aware Investigation Chat
-               ══════════════════════════════════════════════════════════════════ -->
-          <section class="chat-panel-section" id="ask-payvault-ai-section" aria-label="Ask Payvault AI">
+              <div class="evidence-accordion-container" id="evidence-accordion-list">
+                <!-- Dynamically populated expandable evidence items -->
+              </div>
+            </section>
 
-            <div class="chat-panel-header">
-              <div class="chat-panel-title-row">
-                <div class="chat-panel-icon" aria-hidden="true">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                    <rect width="24" height="24" rx="6" fill="#0f172a"/>
-                    <path d="M6 16.5L9.5 7.5h3.5l-2.2 5.2h4.4L13 16.5H6z" fill="#ffffff"/>
-                    <path d="M13 7.5h3.5l1.7 4.2h-3.5L13 7.5z" fill="#3b82f6"/>
+            <!-- ══════════════════════════════════════════════════════════════════
+                 E. PAYVAULT AI — Conversational Reasoning & Thinking UI
+                 ══════════════════════════════════════════════════════════════════ -->
+            <section class="chat-panel-section" id="ask-payvault-ai-section" aria-label="Ask Payvault AI">
+
+              <div class="chat-panel-header">
+                <div class="chat-panel-title-row">
+                  <div class="chat-panel-icon" aria-hidden="true">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                      <rect width="24" height="24" rx="6" fill="#0f172a"/>
+                      <path d="M6 16.5L9.5 7.5h3.5l-2.2 5.2h4.4L13 16.5H6z" fill="#ffffff"/>
+                      <path d="M13 7.5h3.5l1.7 4.2h-3.5L13 7.5z" fill="#3b82f6"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 class="chat-panel-title">Ask Payvault AI</h3>
+                    <p class="chat-panel-subtitle">Ask questions about this investigation, its financial evidence, and recommended next steps.</p>
+                  </div>
+                  <div class="chat-provenance-badge" id="chat-provenance-badge">
+                    <span class="chat-prov-dot online"></span>
+                    <span class="chat-prov-label" id="chat-prov-label">Payvault AI</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Suggested Questions -->
+              <div class="chat-suggested-section">
+                <span class="chat-suggested-label">Suggested questions</span>
+                <div class="chat-suggested-pills" id="chat-suggested-pills">
+                  <!-- Populated dynamically with case-aware questions -->
+                </div>
+              </div>
+
+              <!-- Conversation Thread -->
+              <div class="chat-conversation" id="chat-conversation" role="log" aria-live="polite" aria-label="Investigation conversation">
+                <!-- Messages populated dynamically -->
+                <div class="chat-empty-state" id="chat-empty-state">
+                  <p>No questions yet. Ask anything about this investigation.</p>
+                </div>
+              </div>
+
+              <!-- Input Row -->
+              <div class="chat-input-row">
+                <label for="chat-input" class="sr-only">Ask about this investigation</label>
+                <textarea
+                  class="chat-input"
+                  id="chat-input"
+                  name="chat-message"
+                  placeholder="Ask about this investigation…"
+                  rows="1"
+                  maxlength="1000"
+                  autocomplete="off"
+                  aria-label="Ask about this investigation"
+                ></textarea>
+                <button
+                  class="chat-send-btn"
+                  id="chat-send-btn"
+                  type="button"
+                  aria-label="Send question"
+                  title="Send (Enter)"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
+                </button>
+              </div>
+              <div class="chat-input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line · Max 1000 characters</div>
+
+            </section><!-- /ask-payvault-ai-section -->
+
+            <!-- ══════════════════════════════════════════════════════════════════
+                 F. OPERATOR ACTION / RESOLUTION — Final Human Authority
+                 ══════════════════════════════════════════════════════════════════ -->
+            <section class="operator-action-section" id="operator-action-section" aria-label="Operator Action & Resolution">
+              <div class="operator-action-header">
+                <div class="operator-action-title-group">
+                  <span class="operator-action-icon">⚖️</span>
+                  <div>
+                    <h3 class="operator-action-title">Operator Action & Resolution</h3>
+                    <p class="operator-action-subtitle">Payvault AI provides grounded causal intelligence; human operators make the authoritative closing decision.</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 class="chat-panel-title">Ask Payvault AI</h3>
-                  <p class="chat-panel-subtitle">Ask questions about this investigation, its financial evidence, and recommended next steps.</p>
+                <span class="operator-action-badge font-mono" id="operator-case-status-badge">AWAITING DECISION</span>
+              </div>
+
+              <div class="operator-action-body">
+                <!-- Unresolved Action Controls (OPEN / IN_REVIEW) -->
+                <div class="operator-action-controls" id="operator-action-controls">
+                  <div class="operator-action-info">
+                    <p class="operator-action-prompt-text">
+                      Review the investigation findings, evidence trail, and AI reasoning above. Once verified, document the business justification to close this exception.
+                    </p>
+                  </div>
+                  <div class="operator-action-btn-row">
+                    <button class="btn-resolve-prominent" id="btn-bottom-resolve" type="button">
+                      <svg width="16" height="16" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 7.5l3 3 6-6"/>
+                      </svg>
+                      <span>Resolve Investigation</span>
+                    </button>
+                  </div>
                 </div>
-                <div class="chat-provenance-badge" id="chat-provenance-badge">
-                  <span class="chat-prov-dot online"></span>
-                  <span class="chat-prov-label" id="chat-prov-label">Payvault AI</span>
+
+                <!-- Resolution Summary Banner (Shown for RESOLVED cases) -->
+                <div class="resolution-banner-card" id="resolution-summary-card" style="display:none;">
+                  <div class="res-banner-header">
+                    <div class="res-check-icon">✓</div>
+                    <div class="res-banner-title-col">
+                      <div class="res-banner-title">Case Marked as Resolved by Operator</div>
+                      <div class="res-banner-time" id="view-resolution-time">Resolved on Aug 30, 2026</div>
+                    </div>
+                  </div>
+                  <div class="res-banner-body">
+                    <div class="res-field-item">
+                      <span class="res-field-tag">Resolution Reason</span>
+                      <span class="res-field-val font-mono" id="view-resolution-reason">—</span>
+                    </div>
+                    <div class="res-field-item full">
+                      <span class="res-field-tag">Operator Notes</span>
+                      <p class="res-notes-p" id="view-resolution-notes">—</p>
+                    </div>
+                    <div class="res-field-item">
+                      <span class="res-field-tag">Audited By</span>
+                      <span class="res-field-val font-mono" id="view-resolution-actor">operator</span>
+                    </div>
+                  </div>
+                  <div class="res-banner-actions">
+                    <button class="btn-reopen-action" id="btn-bottom-reopen" type="button">
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6">
+                        <path d="M1.5 7A5.5 5.5 0 0111 2.7M12.5 7A5.5 5.5 0 013 11.3M11 1.2v2.5H8.5M3 12.8v-2.5h2.5"/>
+                      </svg>
+                      <span>Reopen Case</span>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <!-- Suggested Questions -->
-            <div class="chat-suggested-section">
-              <span class="chat-suggested-label">Suggested questions</span>
-              <div class="chat-suggested-pills" id="chat-suggested-pills">
-                <!-- Populated dynamically with case-aware questions -->
-              </div>
-            </div>
-
-            <!-- Conversation Thread -->
-            <div class="chat-conversation" id="chat-conversation" role="log" aria-live="polite" aria-label="Investigation conversation">
-              <!-- Messages populated dynamically -->
-              <div class="chat-empty-state" id="chat-empty-state">
-                <p>No questions yet. Ask anything about this investigation.</p>
-              </div>
-            </div>
-
-            <!-- Input Row -->
-            <div class="chat-input-row">
-              <label for="chat-input" class="sr-only">Ask about this investigation</label>
-              <textarea
-                class="chat-input"
-                id="chat-input"
-                name="chat-message"
-                placeholder="Ask about this investigation…"
-                rows="1"
-                maxlength="1000"
-                autocomplete="off"
-                aria-label="Ask about this investigation"
-              ></textarea>
-              <button
-                class="chat-send-btn"
-                id="chat-send-btn"
-                type="button"
-                aria-label="Send question"
-                title="Send (Enter)"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                  <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-              </button>
-            </div>
-            <div class="chat-input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line · Max 1000 characters</div>
-
-          </section><!-- /ask-payvault-ai-section -->
+            </section>
 
         </div><!-- /active-case-container -->
 

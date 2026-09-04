@@ -30,9 +30,19 @@ router.get('/results', (req, res) => {
     if (status)   results = results.filter(r => r.status === status.toUpperCase());
     if (category) results = results.filter(r => r.exception_category === category.toUpperCase());
 
+    // Enrich reconciliation results with canonical exception_id
+    const exceptions = store.getExceptions();
+    const enrichedResults = results.map(r => {
+      const exc = exceptions.find(e => e.reconciliation_result_id === r.id);
+      return {
+        ...r,
+        exception_id: exc ? (exc.id || exc.case_id) : null,
+      };
+    });
+
     return res.json({
-      count: results.length,
-      results,
+      count: enrichedResults.length,
+      results: enrichedResults,
       data_note: 'SYNTHETIC DATA — reconciliation results derived from synthetic settlement records.',
     });
   } catch (err) {

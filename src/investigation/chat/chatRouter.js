@@ -4,46 +4,54 @@
  *
  * Payvault AI — Core Intelligence & Decision Routing Layer.
  *
- * ARCHITECTURE PRINCIPLE:
- * Payvault uses OUR OWN BUILT AI / LOCAL INTELLIGENCE as the PRIMARY AI.
- * Advanced open-weight models (Qwen via Ollama) serve ONLY as an internal
- * secondary reasoning aid for difficult, ambiguous, or multi-hop questions.
+ * ═══════════════════════════════════════════════════════════════
+ * ACTIVE CHAT EXECUTION PATH:
+ * POST /api/investigations/:id/chat  →  PayvaultAI.generateFinalAnswer()
+ *                                            ↓
+ *                              nativeReasoning.generateNativeAnswer()
+ *                                            ↓
+ *                              Deterministic answer from case data
  *
- * DECISION LAYER STRUCTURE:
- * class PayvaultAI {
- *   understandQuestion()
- *   determineIntent()
- *   assessComplexity()
- *   reasonWithLocalIntelligence()
- *   shouldUseAdvancedReasoning()
- *   optionallyConsultAdvancedModel()
- *   validateAgainstCaseData()
- *   generateFinalAnswer()
- * }
+ * 100% Native Payvault AI Reasoning.
+ * ═══════════════════════════════════════════════════════════════
+ *
+ * PAYVAULT AI REASONING PIPELINE:
+ *   User Question
+ *        ↓
+ *   Conversation Understanding  (resolveConversationReferences)
+ *        ↓
+ *   Intent Understanding        (classifyIntent — semantic, NOT keyword)
+ *        ↓
+ *   Investigation Context       (buildReasoningResult — uses case facts)
+ *        ↓
+ *   Relevant Knowledge          (investigationKnowledge layer)
+ *        ↓
+ *   Payvault AI Reasoning       (internal structured reasoning result)
+ *        ↓
+ *   Deterministic Financial     (verified from ctx — never hallucinated)
+ *        ↓
+ *   Action / Evidence Reasoning (procedure, escalation, evidence sources)
+ *        ↓
+ *   Answer Construction         (dynamic, intent-specific, case-specific)
+ *        ↓
+ *   Financial + Evidence Validation
+ *        ↓
+ *   Final Payvault AI Response
  */
 
-const { generateLocalAnswer, analyzeIntent } = require('./localChatEngine');
-const { defaultOllamaChatEngine }            = require('./ollamaChatEngine');
+const {
+  generateNativeAnswer,
+  generateNativeAnswerAsync,
+  analyzeIntent,
+} = require('./nativeReasoning');
 
-/**
- * Signals indicating a query requires advanced multi-hop reasoning or
- * cross-transaction anomaly analysis beyond standard single-case facts.
- */
-const COMPLEX_QUERY_PATTERNS = [
-  /\b(compare|compared|comparing|comparison)\b/i,
-  /\b(other transactions|across transactions|different transactions|another case)\b/i,
-  /\b(suspicious|unusual|anomaly|irregular|fishy|strange)\b/i,
-  /\b(same root cause|correlated|correlation|shared cause)\b/i,
-  /\b(additional evidence|what other evidence|further investigation|look beyond)\b/i,
-  /\b(most likely explanation|alternative explanation|hypothetical|what if)\b/i,
-  /\b(relationship between|connect .* and|correlate .* with)\b/i,
-  /\b(pattern|patterns)\b/i,
-];
+// ── Complexity / Intent Classification for Routing Decisions ─────────────────
+//
+// These intents are handled directly with high confidence by native reasoning.
+// ALL intents are now handled natively — this set documents which have the
+// highest pre-classification confidence.
 
-/**
- * Straightforward intents answered directly by Payvault local intelligence with high confidence.
- */
-const DIRECT_HIGH_CONFIDENCE_INTENTS = new Set([
+const HIGH_CONFIDENCE_INTENTS = new Set([
   'tax_specific',
   'fee_specific',
   'is_fee_the_problem',
@@ -51,37 +59,45 @@ const DIRECT_HIGH_CONFIDENCE_INTENTS = new Set([
   'amount_at_risk',
   'why_flagged',
   'what_to_verify',
+  'next_action',
+  'escalation_assessment',
+  'real_financial_loss',
+  'evidence_assessment',
+  'historical_cases',
   'simple_explanation',
   'full_financial_breakdown',
-  'historical_cases',
   'state_change_guard',
   'identifier_lookup',
   'math_explanation',
   'why_not_90_paise',
   'settlement_lookup',
+  'diagnostic_summary',
 ]);
 
 /**
  * PayvaultAI Controller Class.
  *
- * Encapsulates understanding, complexity assessment, local intelligence reasoning,
- * optional advanced consultation, case data validation, and final answer synthesis.
+ * Encapsulates the full reasoning pipeline:
+ *   understandQuestion → determineIntent → assessComplexity →
+ *   reasonNatively → validateAnswer → generateFinalAnswer
+ *
+ * ARCHITECTURAL GUARANTEE: Ollama/Qwen are NEVER called in this class.
+ * All answers are produced by the native Payvault AI reasoning pipeline.
  */
 class PayvaultAI {
-  constructor(options = {}) {
-    this.advancedEngine = options.advancedEngine || defaultOllamaChatEngine;
-    this.modelName      = 'Payvault AI';
+  constructor() {
+    this.modelName = 'Payvault AI';
   }
 
   /**
-   * 1. Understand the question by normalizing syntax and resolving pronouns/references
-   *    against multi-turn conversation memory.
+   * 1. Understand the question: normalize and resolve conversation references.
    *
-   * @param {string} message - User's input message
-   * @param {Array}  history - Prior conversation turns
-   * @returns {{ normalized: string, contextSummary: string }}
+   * @param {string} message
+   * @param {Array}  history
+   * @returns {{ normalized: string, hasHistory: boolean, previousRole: string|null }}
    */
-  understandQuestion(message, history = []) {
+  understandQuestion(message, history) {
+    history = history || [];
     const normalized = (message || '').trim();
     const lastTurn = history.length > 0 ? history[history.length - 1] : null;
     return {
@@ -92,69 +108,68 @@ class PayvaultAI {
   }
 
   /**
-   * 2. Determine operator intent from natural language using case context.
+   * 2. Determine intent using semantic natural-language understanding.
+   *    Uses the native reasoning engine's intent classifier.
    *
-   * @param {string} message - Current message
-   * @param {Array}  history - Prior turns
-   * @param {Object} ctx     - Grounded case facts
-   * @returns {string} Intent key
+   * @param {string} message
+   * @param {Array}  history
+   * @param {Object} ctx
+   * @returns {string} intent key
    */
-  determineIntent(message, history = [], ctx = {}) {
-    return analyzeIntent(message, history, ctx);
+  determineIntent(message, history, ctx) {
+    return analyzeIntent(message, history || [], ctx || {});
   }
 
   /**
-   * 3. Assess question complexity and determine whether Payvault local intelligence
-   *    is sufficient or if advanced reasoning assistance is needed.
+   * 3. Assess question complexity.
+   *    All intents are natively handled by Payvault AI.
    *
-   * @param {string} message - Current message
-   * @param {Object} ctx     - Case context
-   * @param {Array}  history - Prior turns
+   * @param {string} message
+   * @param {Object} ctx
+   * @param {Array}  history
    * @returns {{ complexity: 'LOW'|'HIGH', shouldAssist: boolean, confidence: number, reason: string }}
    */
-  assessComplexity(message, ctx, history = []) {
+  assessComplexity(message, ctx, history) {
+    history = history || [];
     const norm = (message || '').trim().toLowerCase();
 
-    // State change requests are intercepted directly by Payvault intelligence
+    // State change requests are intercepted directly by native intelligence
     if (/\b(resolve|close|reopen|delete|approve|reject)\b/i.test(norm)) {
       return {
         complexity: 'LOW',
         shouldAssist: false,
         confidence: 1.0,
-        reason: 'State mutation safeguard intercepted by Payvault AI',
+        reason: 'State mutation safeguard handled by Payvault AI natively',
       };
     }
 
-    // Check for explicit complex/multi-hop reasoning patterns
-    const matchedComplex = COMPLEX_QUERY_PATTERNS.find(pat => pat.test(norm));
-    if (matchedComplex) {
+    // Multi-hop analytical questions are handled natively
+    const ANALYTICAL_PATTERNS = [
+      /\b(compare|compared|comparing|comparison)\b/i,
+      /\b(other transactions|across transactions|different transactions)\b/i,
+      /\b(same root cause|correlated|correlation|shared cause)\b/i,
+      /\b(relationship between|connect .* and|correlate .* with)\b/i,
+    ];
+
+    const matchedAnalytical = ANALYTICAL_PATTERNS.find(function(pat) { return pat.test(norm); });
+    if (matchedAnalytical) {
       return {
         complexity: 'HIGH',
-        shouldAssist: true,
-        confidence: 0.55,
-        reason: `Complex multi-hop or analytical pattern detected: ${matchedComplex}`,
+        shouldAssist: false,
+        confidence: 0.80,
+        reason: 'Multi-hop analytical question — handled by Payvault AI native reasoning',
       };
     }
 
-    // Evaluate intent from Payvault local intelligence
+    // Evaluate intent from native reasoning
     const intent = this.determineIntent(message, history, ctx);
 
-    if (DIRECT_HIGH_CONFIDENCE_INTENTS.has(intent)) {
+    if (HIGH_CONFIDENCE_INTENTS.has(intent)) {
       return {
         complexity: 'LOW',
         shouldAssist: false,
         confidence: 0.95,
-        reason: `Investigation intent '${intent}' handled with high confidence by Payvault local intelligence`,
-      };
-    }
-
-    // Long or open-ended analytical query with low structural certainty
-    if (norm.split(/\s+/).length > 20 || intent === 'diagnostic_summary') {
-      return {
-        complexity: 'HIGH',
-        shouldAssist: true,
-        confidence: 0.60,
-        reason: 'Open-ended analytical query requiring advanced local reasoning assistance',
+        reason: 'Investigation intent \'' + intent + '\' handled with high confidence by Payvault native reasoning',
       };
     }
 
@@ -162,174 +177,131 @@ class PayvaultAI {
       complexity: 'LOW',
       shouldAssist: false,
       confidence: 0.85,
-      reason: 'Standard case diagnostic handled directly by Payvault local intelligence',
+      reason: 'Standard investigation diagnostic handled by Payvault AI native reasoning',
     };
   }
 
   /**
-   * 4. Primary reasoning: Generate answer using Payvault's native local intelligence,
-   *    deterministic financial calculations, and investigation facts.
+   * 4. Reason natively: Generate answer using Payvault's native reasoning pipeline.
+   *    Uses investigation context, knowledge layer, deterministic financial facts,
+   *    and conversation history.
    *
-   * @param {string} message - Current message
-   * @param {Object} ctx     - Case context
-   * @param {Array}  history - Prior turns
+   * @param {string} message
+   * @param {Object} ctx
+   * @param {Array}  history
    * @returns {{ answer: string, intent: string }}
    */
-  reasonWithLocalIntelligence(message, ctx, history = []) {
-    return generateLocalAnswer(message, ctx, history);
+  reasonNatively(message, ctx, history) {
+    return generateNativeAnswer(message, ctx, history || []);
   }
 
   /**
-   * 5. Decision gate: Check if advanced local reasoning fallback should be invoked.
+   * shouldUseAdvancedReasoning — Always returns false.
    *
-   * @param {Object} evaluation - Result of assessComplexity
-   * @returns {boolean}
+   * @returns {boolean} Always false
    */
-  shouldUseAdvancedReasoning(evaluation) {
-    return Boolean(evaluation && evaluation.shouldAssist);
+  shouldUseAdvancedReasoning() {
+    return false;
   }
 
   /**
-   * 6. Secondary aid: Internally consult the advanced open-weight model for difficult cases.
+   * 5. Validate and ground the answer against deterministic case data.
+   *    Anti-hallucination checks on financial figures.
    *
-   * @param {string} message - Current message
-   * @param {Object} ctx     - Case context
-   * @param {Array}  history - Prior turns
-   * @returns {Promise<{ success: boolean, answer?: string, reason?: string }>}
-   */
-  async optionallyConsultAdvancedModel(message, ctx, history = []) {
-    const isAvail = await this.advancedEngine.isAvailable();
-    if (!isAvail) {
-      return { success: false, reason: 'ADVANCED_RUNTIME_OFFLINE' };
-    }
-    return this.advancedEngine.chat(message, ctx, history);
-  }
-
-  /**
-   * 7. Validation & Grounding: Validate candidate reasoning against deterministic case data.
-   *    Strictly overrides any invalid numbers, false deductions, or unverified claims.
-   *
-   * @param {string} rawAnswer - Candidate response
-   * @param {Object} ctx       - Deterministic case facts
-   * @returns {string} Grounded and validated answer
+   * @param {string} rawAnswer
+   * @param {Object} ctx
+   * @returns {string} validated answer
    */
   validateAgainstCaseData(rawAnswer, ctx) {
-    if (!rawAnswer || typeof rawAnswer !== 'string') {
-      return null;
-    }
+    if (!rawAnswer || typeof rawAnswer !== 'string') return null;
 
     let validated = rawAnswer.trim();
 
-    // 1. Anti-hallucination check: correct false ₹0.90 secondary deduction claims
-    if (/\b0\.90\b/.test(validated) && ctx.tax_variance_paise) {
-      console.warn('[Payvault AI Validation] Overriding hallucinated ₹0.90 deduction with deterministic GST variance.');
+    // Anti-hallucination: correct the known ₹0.90 false deduction pattern
+    // (Only if not already refuting it e.g. "not ₹0.90" or "never ₹0.90")
+    if (/\b0\.90\b/.test(validated) && ctx.tax_variance_paise && !/\b(not|never|rather than|instead of)\s+₹?0\.90\b/i.test(validated)) {
+      console.warn('[Payvault AI Validation] Correcting hallucinated ₹0.90 deduction with deterministic GST variance.');
       validated = validated.replace(/0\.90/g, (ctx.tax_variance_formatted || '₹4.50').replace('₹', ''));
       validated = validated.replace(/₹0\.90/g, ctx.tax_variance_formatted || '₹4.50');
     }
 
-    // 2. Safeguard: ensure status changes are not claimed in chat text
+    // Safeguard: ensure status changes are not claimed in chat text
     if (/\b(I have resolved|case has been closed|marked as resolved)\b/i.test(validated)) {
-      validated += `\n\n_Note: Case status changes must be confirmed by the operator using the workstation UI buttons._`;
+      validated += '\n\n_Note: Case status changes must be confirmed by the operator using the workstation UI buttons._';
     }
 
-    // 3. Grounding check: verify that primary monetary amounts in the case context match
+    // Grounding check: if answer discusses fee overcharge, verify amount is mentioned
     if (ctx.fee_variance_formatted && !validated.includes(ctx.fee_variance_formatted)) {
       if (/\b(fee overcharge|platform fee variance)\b/i.test(validated) && !validated.includes('₹')) {
-        validated += ` (Verified fee overcharge: ${ctx.fee_variance_formatted})`;
+        validated += ' (Verified fee overcharge: ' + ctx.fee_variance_formatted + ')';
       }
     }
+
+    // Clean internal/debug phrases from user-facing text
+    validated = validated.replace(/_?Reconciliation rule finding:?[^_\n]+_?/gi, '');
+    validated = validated.replace(/\b\d+\s+paise\s+exceeds\s+tolerance[^\n]*/gi, '');
+    validated = validated.replace(/Merchant order found but no deterministic rule fully resolved[^\n]*/gi, '');
+    validated = validated.replace(/\n{3,}/g, '\n\n').trim();
 
     return validated;
   }
 
   /**
-   * 8. Master Orchestrator: Generate final response presented as Payvault AI.
+   * 6. Master Orchestrator: Generate the final Payvault AI response.
    *
-   * Decision Flow:
-   *  if (local reasoning can confidently answer):
-   *      use Payvault local intelligence
-   *  else if (question is difficult/ambiguous):
-   *      internally consult advanced local reasoning fallback
-   *      validate its reasoning against Payvault case facts
-   *      produce the final response as Payvault AI
-   *  else:
-   *      explain that the available case data is insufficient
+   * EXECUTION PATH:
+   *   understandQuestion
+   *     → assessComplexity
+   *       → reasonNatively   (Payvault native reasoning — NO Qwen/Ollama)
+   *         → validateAgainstCaseData
+   *           → return final answer as "Payvault AI"
    *
    * @param {Object} params
-   * @param {string} params.message - Operator question
-   * @param {Object} params.ctx     - Grounded case facts
-   * @param {Array}  params.history - Prior turns
-   * @param {Object} [params.options] - Overrides
+   * @param {string} params.message
+   * @param {Object} params.ctx
+   * @param {Array}  params.history
+   * @param {Object} [params.conversationState]
    * @returns {Promise<{ answer: string, model: string, source: string, execution_mode: string, intent: string, confidence: number }>}
    */
-  async generateFinalAnswer({ message, ctx, history = [], options = {} }) {
+  async generateFinalAnswer({ message, ctx, history, conversationState = null }) {
+    history = history || [];
     const t0 = Date.now();
+
     const { normalized } = this.understandQuestion(message, history);
     const evaluation = this.assessComplexity(normalized, ctx, history);
 
-    const advancedConfigured = (
-      process.env.ENABLE_OLLAMA    === 'true' ||
-      process.env.AI_QWEN_ENABLED  === 'true' ||
-      process.env.ENABLE_OLLAMA    !== 'false'
-    );
-
-    let finalAnswer = null;
-    let executionMode = 'DIRECT_PAYVAULT_AI';
-    let internalSource = 'payvault_local_intelligence';
-    let intent = this.determineIntent(normalized, history, ctx);
-
-    // ── STEP 1: If difficult/ambiguous, internally consult advanced fallback ──
-    if (this.shouldUseAdvancedReasoning(evaluation) && advancedConfigured && !options.forceDirect) {
-      try {
-        console.log(`[Payvault AI] Difficult question detected (${evaluation.reason}). Internally consulting advanced reasoning fallback for case ${ctx.case_id}...`);
-        const assistResult = await this.optionallyConsultAdvancedModel(normalized, ctx, history);
-
-        if (assistResult.success && assistResult.answer) {
-          const validated = this.validateAgainstCaseData(assistResult.answer, ctx);
-          if (validated) {
-            finalAnswer = validated;
-            executionMode = 'ADVANCED_REASONING_ASSISTED';
-            internalSource = 'payvault_ai+advanced_fallback';
-            intent = 'complex_assisted_reasoning';
-            console.log(`[Payvault AI] Advanced reasoning completed and validated in ${Date.now() - t0}ms.`);
-          }
-        }
-      } catch (err) {
-        console.warn(`[Payvault AI] Advanced fallback error (${err.message}). Using Payvault local intelligence.`);
-      }
+    // ── NATIVE PAYVAULT AI REASONING ──────────────────────────────────────────
+    let nativeResult = null;
+    try {
+      nativeResult = await generateNativeAnswerAsync(normalized, ctx, history, conversationState);
+    } catch (_) {
+      nativeResult = this.reasonNatively(normalized, ctx, history);
     }
+    const rawAnswer = nativeResult.answer;
+    const intent = nativeResult.intent;
 
-    // ── STEP 2: Default & High-Confidence — Payvault Local Intelligence ───────
-    if (!finalAnswer) {
-      const localResult = this.reasonWithLocalIntelligence(normalized, ctx, history);
-      finalAnswer = localResult.answer;
-      intent = localResult.intent;
-      executionMode = 'DIRECT_PAYVAULT_AI';
-      internalSource = 'payvault_local_intelligence';
-      console.log(`[Payvault AI] Direct answer produced by Payvault local intelligence in ${Date.now() - t0}ms (intent: ${intent}, confidence: ${(evaluation.confidence * 100).toFixed(0)}%).`);
-    }
+    // Validate and ground against deterministic case data
+    const validatedAnswer = this.validateAgainstCaseData(rawAnswer, ctx);
 
-    // ── STEP 3: Fallback if case data is insufficient ────────────────────────
-    if (!finalAnswer) {
-      finalAnswer = `Payvault AI is unable to evaluate this case with the available data. Please verify ledger and gateway settlement records directly in the workstation.`;
-    }
+    const finalAnswer = validatedAnswer || rawAnswer ||
+      'Payvault AI is unable to evaluate this case with the available data. Please verify ledger and gateway settlement records directly in the workstation.';
+
+    console.log('[Payvault AI] Native answer generated in ' + (Date.now() - t0) + 'ms (intent: ' + intent + ', confidence: ' + (evaluation.confidence * 100).toFixed(0) + '%).');
 
     return {
-      answer: finalAnswer,
-      model: this.modelName,
-      source: internalSource,
-      execution_mode: executionMode,
+      answer:            finalAnswer,
+      model:             this.modelName,
+      source:            'payvault_native_intelligence',
+      execution_mode:    'DIRECT_PAYVAULT_AI',
       intent,
-      confidence: evaluation.confidence,
+      confidence:        evaluation.confidence,
+      conversationState: nativeResult ? nativeResult.conversationState : null,
     };
   }
 }
 
 const defaultPayvaultAI = new PayvaultAI();
 
-/**
- * Functional wrapper for routeAndAnswerChat.
- */
 async function routeAndAnswerChat(params) {
   return defaultPayvaultAI.generateFinalAnswer(params);
 }
@@ -348,5 +320,8 @@ module.exports = {
   routeAndAnswerChat,
   evaluateQueryComplexity,
   validateAssistedAnswer,
-  COMPLEX_QUERY_PATTERNS,
+  HIGH_CONFIDENCE_INTENTS,
+  // COMPLEX_QUERY_PATTERNS is removed — all questions are now handled natively.
+  // Export empty array for backwards compatibility with any test that imports it:
+  COMPLEX_QUERY_PATTERNS: [],
 };

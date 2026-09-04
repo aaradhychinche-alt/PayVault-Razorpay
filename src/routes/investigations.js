@@ -9,24 +9,27 @@
  * POST /api/investigations/:id/resolve             — resolve an exception case with human justification
  * POST /api/investigations/:id/reopen              — reopen a resolved exception case
  * GET  /api/investigations/:id/audit               — get append-only audit trail for a case
- * POST /api/investigations/:id/chat                — case-aware AI chat (Ask Payvault AI)
+ * POST /api/investigations/:id/chat                — case-aware Payvault AI chat (Ask Payvault AI)
  *
  * DESIGN NOTES:
  * - AI engine NEVER automatically marks cases as RESOLVED.
  * - Human operators always review evidence and make final resolution decisions.
  * - All state transitions append to the audit log.
  * - Chat is a read-only explanation layer; it never changes case state.
+ * - Chat POST /api/investigations/:id/chat routes exclusively through Payvault AI
+ *   native reasoning (chatRouter → nativeReasoning).
  */
 
 const express                       = require('express');
 const router                        = express.Router();
 const store                         = require('../store/dataStore');
-const { buildCase }                 = require('../investigation/caseBuilder');
+const investigationRepository       = require('../db/repositories/investigationRepository');
+const auditRepository               = require('../db/repositories/auditRepository');
+const redisClient                   = require('../db/redis');
+const { buildCase, computeCasePriority } = require('../investigation/caseBuilder');
 const { investigate }               = require('../investigation/ai/engine');
 const { buildIntelligenceContext }  = require('../investigation/intelligence/context');
 const { buildChatContext }          = require('../investigation/chat/chatContextBuilder');
-const { generateLocalAnswer }       = require('../investigation/chat/localChatEngine');
-const { defaultOllamaChatEngine }   = require('../investigation/chat/ollamaChatEngine');
 const { routeAndAnswerChat }        = require('../investigation/chat/chatRouter');
 const {
   CaseStatus,
@@ -50,12 +53,15 @@ function buildCaseList() {
   return exceptions.map(exc => {
     const rr = s.reconciliationResults.find(r => r.id === exc.reconciliation_result_id);
     const lifecycle = store.getCaseLifecycle(exc.id);
+    const prio = computeCasePriority(exc, rr);
 
     return {
       id:                   exc.id,
       case_id:              exc.id,
       exception_category:   exc.category,
       amount_at_risk:       exc.amount_at_risk,
+      priority:             prio.level,
+      priority_reason:      prio.reason,
       status:               lifecycle.status,
       reconciliation_status: rr ? rr.status : 'UNKNOWN',
       resolution:           lifecycle.resolution || null,
@@ -203,10 +209,10 @@ router.get('/:id/intelligence', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /api/investigations/:id/run
+// POST /api/investigations/:id/run and POST /api/investigations/:id/investigate
 // Runs AI investigation on a case and transitions status to IN_REVIEW.
 // ─────────────────────────────────────────────────────────────────────────────
-router.post('/:id/run', async (req, res) => {
+const handleRunInvestigation = async (req, res) => {
   try {
     const s         = store.getStore();
     const exception = s.exceptions.find(e => e.id === req.params.id);
@@ -238,7 +244,25 @@ router.post('/:id/run', async (req, res) => {
     const aiAnalysis = await investigate(investigationCase);
     store.saveAiInvestigation(exception.id, aiAnalysis);
 
+    // Persist to PostgreSQL repository (or dev fallback)
+    investigationRepository.save({
+      id: `inv_${exception.id}`,
+      exception_id: exception.id,
+      case_id: investigationCase.case_id,
+      exception_category: investigationCase.exception_category,
+      status: updatedLifecycle.status,
+      amount_at_risk_paise: investigationCase.amount_at_risk,
+      summary: aiAnalysis.summary,
+      what_happened: aiAnalysis.what_happened,
+      why_it_matters: aiAnalysis.why_it_matters,
+      recommended_actions: aiAnalysis.recommended_actions,
+      evidence_summary: aiAnalysis.evidence,
+      confidence_score: aiAnalysis.confidence?.score,
+      raw_investigation: aiAnalysis,
+    }).catch(e => console.error('[investigationRepository] Background save warning:', e.message));
+
     return res.json({
+      id:                 investigationCase.id,
       case_id:            investigationCase.case_id,
       exception_category: investigationCase.exception_category,
       amount_at_risk:     investigationCase.amount_at_risk,
@@ -258,7 +282,10 @@ router.post('/:id/run', async (req, res) => {
     console.error('[investigations/run] Error:', err);
     return res.status(500).json({ error: `AI investigation failed: ${err.message}` });
   }
-});
+};
+
+router.post('/:id/run', handleRunInvestigation);
+router.post('/:id/investigate', handleRunInvestigation);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/investigations/:id/resolve
@@ -394,8 +421,8 @@ router.get('/:id/audit', (req, res) => {
 // - Never exposes secrets, credentials, or unrelated merchant data.
 // - Never modifies case state.
 // - Financial facts come exclusively from the deterministic Payvault case data.
-// - Ollama is ONLY used when ENABLE_OLLAMA=true AND actually available.
-// - Always falls back to Payvault Local Intelligence when Ollama is absent/disabled.
+// - ACTIVE PATH: chatRouter -> nativeReasoning (Payvault AI native intelligence).
+// - NO Qwen. NO Ollama. NO external LLM is called.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/:id/chat', async (req, res) => {
   try {
@@ -440,25 +467,43 @@ router.post('/:id/chat', async (req, res) => {
       savedAi,
     });
 
-    // ── Execute Payvault AI Hybrid Copilot ─────────────────────────────────
-    // Payvault AI Core is the primary controller. Straightforward queries are
-    // answered directly with high confidence. Complex queries request internal
-    // assistance from the local model, followed by validation.
+    const conversationId = req.body?.conversationId || req.headers['x-conversation-id'] || `conv_${id}_default`;
+
+    // ── Load previous conversation state from Redis ────────────────────────
+    let redisState = null;
+    try {
+      redisState = await redisClient.getConversationState(id, conversationId);
+    } catch (e) {
+      console.warn('[Redis] Transient get warning:', e.message);
+    }
+
+    // ── Execute Payvault AI Reasoning ──────────────────────────────────────
     const chatResult = await routeAndAnswerChat({
       message: message.trim(),
       ctx,
       history,
+      conversationState: redisState,
     });
 
+    // ── Save updated conversation state to Redis ───────────────────────────
+    if (chatResult.conversationState) {
+      try {
+        await redisClient.saveConversationState(id, conversationId, chatResult.conversationState);
+      } catch (e) {
+        console.warn('[Redis] Transient save warning:', e.message);
+      }
+    }
+
     return res.json({
-      answer:         chatResult.answer,
-      source:         chatResult.source,
-      case_id:        id,
-      ai_used:        chatResult.execution_mode === 'HYBRID_ASSISTED',
-      model:          'Payvault AI',
-      execution_mode: chatResult.execution_mode,
-      intent:         chatResult.intent,
-      confidence:     chatResult.confidence,
+      answer:          chatResult.answer,
+      source:          chatResult.source,
+      case_id:         id,
+      conversation_id: conversationId,
+      ai_used:         chatResult.execution_mode === 'HYBRID_ASSISTED',
+      model:           'Payvault AI',
+      execution_mode:  chatResult.execution_mode,
+      intent:          chatResult.intent,
+      confidence:      chatResult.confidence,
     });
 
   } catch (err) {

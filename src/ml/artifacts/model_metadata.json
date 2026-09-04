@@ -97,7 +97,7 @@
       "importance": 0.035
     }
   ],
-  "training_timestamp_utc": "2026-08-31T10:36:14.261565",
+  "training_timestamp_utc": "2026-09-04T19:23:44.803158+00:00",
   "total_dataset_size": 2370,
   "train_samples": 1777,
   "test_samples": 593,

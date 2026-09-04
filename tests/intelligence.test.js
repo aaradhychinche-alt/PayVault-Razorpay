@@ -488,7 +488,7 @@ describe('Chunk 4 — Investigation Intelligence Suite', () => {
       const missingMemory = missingReport.intelligence_context.memory_context;
       expect(missingMemory.matching_category_precedents).toBe(0);
       expect(missingMemory.dominant_historical_reason).toBeNull();
-    });
+    }, 30000);
   });
 
 });

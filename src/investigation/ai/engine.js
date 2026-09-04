@@ -33,7 +33,6 @@ const { formatReport }             = require('./formatter');
 const { evaluateDifficulty }       = require('./difficulty');
 const { defaultAdapter }           = require('./model/localModel');
 const { defaultPayvaultModel }     = require('./model/payvaultModel');
-const { defaultQwenModel }         = require('./model/qwenModel');
 const { defaultModelRouter, ModelRouter } = require('./model/modelRouter');
 const { buildIntelligenceContext } = require('../intelligence/context');
 const { calibrateConfidence }      = require('../intelligence/calibration');
@@ -47,7 +46,6 @@ const dataStore                    = require('../../store/dataStore');
  * @param {Object} [options.store]        - Custom dataStore instance
  * @param {Object} [options.router]       - Custom ModelRouter instance
  * @param {Object} [options.mlModel]      - Custom ML model instance
- * @param {Object} [options.qwenModel]    - Custom Qwen model instance
  * @returns {Promise<Object>} Unified AI investigation report
  */
 async function investigate(investigationCase, options = {}) {
@@ -66,34 +64,15 @@ async function investigate(investigationCase, options = {}) {
     store: currentStore,
   });
 
-  // ── Step 4: Run Model Router (Local ML + Difficulty Gating + Qwen Escalation)
-  const router = options.router || (options.mlModel || options.qwenModel
-    ? new ModelRouter({ primaryModel: options.mlModel, qwenModel: options.qwenModel })
+  // ── Step 4: Run Model Router (Payvault Local ML + Difficulty Evaluation) ──
+  const router = options.router || (options.mlModel
+    ? new ModelRouter({ primaryModel: options.mlModel })
     : defaultModelRouter);
 
   const routing = await router.route(investigationCase, options);
 
   // ── Step 5: AI Reasoning & Multi-Candidate Hypothesis Generation ──────────
   let reasoningOutput = reasonOverCase(investigationCase, evidence, patterns);
-
-  // If local Qwen provided an escalated analysis, incorporate its refined insights
-  if (routing.qwen_result && routing.qwen_result.success && routing.qwen_result.analysis) {
-    const qa = routing.qwen_result.analysis;
-    if (qa.what_happened) {
-      reasoningOutput.primary_root_cause.cause = qa.what_happened;
-    }
-    if (qa.recommended_action) {
-      reasoningOutput.recommended_actions = [
-        {
-          action_type: 'RECOMMENDED_RESOLUTION',
-          priority: 'HIGH',
-          description: qa.recommended_action,
-          resolution_hint: qa.recommended_action,
-        },
-        ...(reasoningOutput.recommended_actions || []),
-      ];
-    }
-  }
 
   // ── Step 6: Measurable Confidence Calculation & Calibration ───────────────
   const baseConfidence = calculateConfidence({

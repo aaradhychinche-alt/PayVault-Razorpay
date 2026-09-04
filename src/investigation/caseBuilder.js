@@ -130,10 +130,15 @@ function buildCase({ exception, reconResult, store }) {
       : null,
   };
 
+  const priorityInfo = computeCasePriority(exception, reconResult);
+
   const investigationCase = {
+    id:                   exception.id,
     case_id:              exception.id,
     exception_category:   exception.category,
     amount_at_risk:       exception.amount_at_risk,
+    priority:             priorityInfo.level,
+    priority_info:        priorityInfo,
     status:               'open',
     exception,
     reconciliation_result: reconResult,
@@ -152,4 +157,65 @@ function buildCase({ exception, reconResult, store }) {
   return investigationCase;
 }
 
-module.exports = { buildCase };
+/**
+ * Deterministically compute investigation priority based on category and financial exposure.
+ *
+ * @param {Object} exception
+ * @param {Object} [reconResult]
+ * @returns {{ level: 'HIGH'|'MEDIUM'|'LOW', reason: string }}
+ */
+function computeCasePriority(exception, reconResult) {
+  if (!exception) return { level: 'MEDIUM', reason: 'Standard exception' };
+
+  const cat = exception.category || 'UNEXPLAINED';
+  const risk = exception.amount_at_risk || 0;
+
+  // Immediate operational hold or unexplained balance break
+  if (cat === 'DUPLICATE' || cat === 'UNEXPLAINED') {
+    return {
+      level: 'HIGH',
+      reason: cat === 'DUPLICATE'
+        ? 'Duplicate settlement requires immediate disbursement hold'
+        : 'Unexplained discrepancy on reconciliation balance',
+    };
+  }
+
+  // Contract fee/tax variance directly causing settlement shortfall
+  if (cat === 'FEE_TAX_VARIANCE') {
+    const isMaterial = risk >= 2000;
+    return {
+      level: isMaterial ? 'HIGH' : 'MEDIUM',
+      reason: isMaterial
+        ? 'Confirmed gateway fee/tax variance impacting net settlement'
+        : 'Fee discrepancy within tolerance threshold',
+    };
+  }
+
+  // Missing payments or missing merchant orders
+  if (cat === 'MISSING_PAYMENT' || cat === 'MISSING_ORDER') {
+    return {
+      level: risk >= 50000 ? 'HIGH' : 'MEDIUM',
+      reason: risk >= 50000
+        ? 'High monetary exposure on missing record'
+        : 'Missing transaction record pending cycle clearance',
+    };
+  }
+
+  // Timing mismatch (cross-period batch split) or standard adjustment
+  if (cat === 'TIMING_MISMATCH' || cat === 'ADJUSTMENT' || cat === 'PARTIAL_REFUND') {
+    return {
+      level: 'LOW',
+      reason: cat === 'TIMING_MISMATCH'
+        ? 'Timing difference balances across settlement batches'
+        : 'Routine ledger adjustment posting',
+    };
+  }
+
+  return {
+    level: risk >= 50000 ? 'HIGH' : (risk >= 10000 ? 'MEDIUM' : 'LOW'),
+    reason: `${cat} with ${risk} paise exposure`,
+  };
+}
+
+module.exports = { buildCase, computeCasePriority };
+

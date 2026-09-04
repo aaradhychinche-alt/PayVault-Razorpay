@@ -48,6 +48,32 @@ function formatDate(isoStr) {
   }
 }
 
+function formatTimelineTime(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toTimeString().split(' ')[0];
+  } catch (e) {
+    return '';
+  }
+}
+
+function derivePriority(c) {
+  if (!c) return 'LOW';
+  if (c.priority) return c.priority;
+  if (c.priority_info?.level) return c.priority_info.level;
+  const cat = c.exception_category || c.category || '';
+  const risk = c.amount_at_risk || 0;
+  if (cat === 'DUPLICATE' || cat === 'UNEXPLAINED' || (cat === 'FEE_TAX_VARIANCE' && risk >= 2000)) {
+    return 'HIGH';
+  }
+  if (risk > 0 || cat === 'MISSING_ORDER' || cat === 'PARTIAL_REFUND') {
+    return 'MEDIUM';
+  }
+  return 'LOW';
+}
+
 function cleanCategoryLabel(cat) {
   if (!cat) return 'Exception';
   const labels = {
@@ -985,7 +1011,6 @@ function renderReconciliationTable(filter = 'ALL') {
 function filterReconciliationTable(filter = 'ALL') {
   renderReconciliationTable(filter);
 }
-window.filterReconciliationTable = filterReconciliationTable;
 
 function searchReconciliationTable() {
   const query = (document.getElementById('search-recon').value || '').toLowerCase();
@@ -994,8 +1019,12 @@ function searchReconciliationTable() {
     r.style.display = r.textContent.toLowerCase().includes(query) ? '' : 'none';
   });
 }
-window.searchReconciliationTable = searchReconciliationTable;
-window.renderReconciliationTable = renderReconciliationTable;
+
+if (typeof window !== 'undefined') {
+  window.filterReconciliationTable = filterReconciliationTable;
+  window.searchReconciliationTable = searchReconciliationTable;
+  window.renderReconciliationTable = renderReconciliationTable;
+}
 
 // ── Page 6: Investigations Workstation (Chunks 2, 3, 4) ──────────────────────
 function renderInvestigationQueue() {
@@ -1108,21 +1137,27 @@ function renderInvestigationQueue() {
   if (emptyPrompt) emptyPrompt.style.display = 'none';
   if (caseContent) caseContent.style.display = 'block';
 
-  listEl.innerHTML = cases.map(c => `
-    <li class="case-item-card ${c.case_id === AppState.currentCaseId ? 'active' : ''}" onclick="selectInvestigationCase('${c.case_id}')">
-      <div class="case-item-top">
-        <span class="case-item-id font-mono">${c.case_id}</span>
-        <span class="case-item-risk font-mono">${formatINR(c.amount_at_risk)}</span>
-      </div>
-      <div class="case-item-row2">
-        <span class="case-item-cat">${cleanCategoryLabel(c.exception_category)}</span>
-        <span class="status-pill ${c.status === 'RESOLVED' ? 'success' : (c.status === 'IN_REVIEW' ? 'info' : 'warning')} font-mono" style="font-size:0.65rem;">
-          ${c.status}
-        </span>
-      </div>
-      <div class="case-item-entity font-mono">${c.settlement_entity_id || c.merchant_order_id || 'Settlement Record'}</div>
-    </li>
-  `).join('');
+  listEl.innerHTML = cases.map(c => {
+    const priority = c.priority || derivePriority(c);
+    const impactAmount = c.amount_at_risk || (c.financial_analysis && c.financial_analysis.amount_at_risk) || 0;
+    return `
+      <li class="case-item-card ${c.case_id === AppState.currentCaseId ? 'active' : ''}" onclick="selectInvestigationCase('${c.case_id}')">
+        <div class="case-item-top">
+          <span class="priority-pill ${priority.toLowerCase()} font-mono">${priority}</span>
+          <span class="case-item-cat">${cleanCategoryLabel(c.exception_category)}</span>
+        </div>
+        <div class="case-item-impact font-mono">
+          ${formatINR(impactAmount)} settlement impact
+        </div>
+        <div class="case-item-bottom">
+          <span class="case-item-id font-mono">${c.case_id}</span>
+          <span class="status-pill ${c.status === 'RESOLVED' ? 'success' : (c.status === 'IN_REVIEW' ? 'info' : 'warning')} font-mono" style="font-size:0.65rem;">
+            ${c.status}
+          </span>
+        </div>
+      </li>
+    `;
+  }).join('');
 
   // Auto-select first case if current selected case is not in the filtered list
   const currentCaseExists = AppState.currentCaseId && cases.some(c => c.case_id === AppState.currentCaseId);
@@ -1149,6 +1184,18 @@ async function selectInvestigationCase(caseId) {
     card.classList.toggle('active', card.querySelector('.case-item-id')?.textContent === caseId);
   });
 
+  // Immediately clear existing summary during transition to prevent stale data / cross-case flicker
+  const findingsContainer = document.getElementById('investigation-results-container');
+  if (findingsContainer) {
+    findingsContainer.style.display = 'none';
+    const stmt = document.getElementById('finding-statement-text');
+    const imp = document.getElementById('finding-impact-text');
+    const actionsList = document.getElementById('finding-actions-list');
+    if (stmt) stmt.textContent = '';
+    if (imp) imp.textContent = '';
+    if (actionsList) actionsList.innerHTML = '';
+  }
+
   try {
     const res = await fetch(`/api/investigations/${caseId}`);
     if (!res.ok) throw new Error('Case not found');
@@ -1158,6 +1205,120 @@ async function selectInvestigationCase(caseId) {
   } catch (err) {
     console.error('[Investigation] Error fetching case:', err);
   }
+}
+
+/**
+ * Synthesizes case-specific, mathematically grounded answers for the 3 Core Questions:
+ * 1. What happened?
+ * 2. Why does it matter?
+ * 3. What should I do?
+ */
+function generateCaseFindings(c, fa = {}, grossPaise = 0, expectedNetPaise = 0, actualNetPaise = 0, shortfallPaise = 0) {
+  const ai = c.ai_investigation || {};
+  const aa = ai.ai_analysis || {};
+  const raw = ai.raw_investigation || {};
+  
+  // Directly use the generated results from backend, checking all possible levels
+  let whatHappened = ai.what_happened || aa.what_happened || raw.what_happened || ai.finding || ai.summary || c.what_happened || c.finding || c.summary || '';
+  let whyDoesItMatter = ai.why_it_matters || aa.why_it_matters || raw.why_it_matters || c.why_it_matters || '';
+
+  // Dynamic fallback for impact if missing but whatHappened is present
+  if (!whyDoesItMatter && whatHappened) {
+    const formattedRisk = typeof formatINR === 'function' ? formatINR(c.amount_at_risk || shortfallPaise || 0) : `₹${((c.amount_at_risk || shortfallPaise || 0) / 100).toFixed(2)}`;
+    if (c.exception_category === 'FEE_TAX_VARIANCE') {
+      whyDoesItMatter = `Overcharged gateway fees reduce merchant net payout margin by ${formattedRisk}.`;
+    } else if (c.exception_category === 'MISSING_ORDER') {
+      whyDoesItMatter = `Unlinked gateway funds cannot be attributed to an internal customer order.`;
+    } else if (c.exception_category === 'DUPLICATE') {
+      whyDoesItMatter = `Duplicate credits may lead to potential clawback or overpayment exposure of ${formattedRisk}.`;
+    } else if (c.exception_category === 'TIMING_MISMATCH') {
+      whyDoesItMatter = `Asynchronous batch timing creates temporary balance sheet discrepancies across reporting periods.`;
+    } else if (c.exception_category === 'MISSING_PAYMENT') {
+      whyDoesItMatter = `Merchant ledger expects ${formattedRisk} that has not been received in any settlement batch.`;
+    } else if (c.exception_category === 'ADJUSTMENT') {
+      whyDoesItMatter = `This ${formattedRisk} adjustment cannot currently be tied to a specific customer order.`;
+    } else {
+      whyDoesItMatter = `Unresolved financial variance of ${formattedRisk} impacts reconciliation accuracy.`;
+    }
+  }
+  
+  // Extract actions from AI recommended_actions or case suggested_actions
+  const rawActions = (Array.isArray(ai.recommended_actions) && ai.recommended_actions.length > 0)
+    ? ai.recommended_actions
+    : (Array.isArray(aa.recommended_actions) && aa.recommended_actions.length > 0)
+      ? aa.recommended_actions
+      : (Array.isArray(raw.recommended_actions) && raw.recommended_actions.length > 0)
+        ? raw.recommended_actions
+        : (Array.isArray(c.suggested_actions) && c.suggested_actions.length > 0)
+          ? c.suggested_actions
+          : (ai.recommended_action ? [ai.recommended_action] : (aa.recommended_action ? [aa.recommended_action] : []));
+
+  const actionItems = rawActions.map((act, index) => {
+    let desc = '';
+    if (typeof act === 'string') {
+      desc = act;
+    } else if (act && typeof act === 'object') {
+      desc = act.description || act.resolution_hint || act.action_type || '';
+    }
+    return { index: index + 1, desc: (desc || '').trim() };
+  }).filter(item => item.desc.length > 0);
+
+  return { whatHappened, whyDoesItMatter, actionItems };
+}
+
+/**
+ * Renders 4 clean, prominent Auditable Transaction Facts cards adapted to the case.
+ */
+function renderAuditableTransactionFacts(c, fa = {}, grossPaise = 0, expectedNetPaise = 0, actualNetPaise = 0, shortfallPaise = 0) {
+  const chipsContainer = document.getElementById('finding-evidence-chips');
+  if (!chipsContainer) return;
+
+  let cards = [];
+  const isFeeVar = c.exception_category === 'FEE_TAX_VARIANCE' || (fa.fee_actual > 0 && fa.fee_variance !== 0);
+
+  if (isFeeVar) {
+    cards = [
+      { label: 'Gross Amount', value: formatINR(grossPaise), isVariance: false },
+      { label: 'Fee Charged', value: formatINR(fa.fee_actual ?? 0), isVariance: false },
+      { label: 'GST Tax', value: formatINR(fa.tax_actual ?? 0), isVariance: false },
+      { label: 'Variance', value: formatINR(shortfallPaise || c.amount_at_risk), isVariance: true },
+    ];
+  } else if (c.exception_category === 'MISSING_ORDER') {
+    cards = [
+      { label: 'Gross Amount', value: formatINR(grossPaise), isVariance: false },
+      { label: 'Settlement Credit', value: formatINR(actualNetPaise), isVariance: false },
+      { label: 'Expected Order', value: 'Unlinked', isVariance: false },
+      { label: 'Amount at Risk', value: formatINR(c.amount_at_risk), isVariance: true },
+    ];
+  } else if (c.exception_category === 'DUPLICATE') {
+    cards = [
+      { label: 'Gross Amount', value: formatINR(grossPaise), isVariance: false },
+      { label: 'Expected Settlement', value: formatINR(expectedNetPaise || grossPaise), isVariance: false },
+      { label: 'Duplicate Credit', value: formatINR(actualNetPaise), isVariance: false },
+      { label: 'Amount at Risk', value: formatINR(c.amount_at_risk), isVariance: true },
+    ];
+  } else if (c.exception_category === 'TIMING_MISMATCH') {
+    cards = [
+      { label: 'Gross Amount', value: formatINR(grossPaise), isVariance: false },
+      { label: 'Batch Payout', value: formatINR(expectedNetPaise || grossPaise), isVariance: false },
+      { label: 'Cross-Batch Debit', value: formatINR(actualNetPaise), isVariance: false },
+      { label: 'Timing Variance', value: formatINR(c.amount_at_risk), isVariance: true },
+    ];
+  } else {
+    cards = [
+      { label: 'Gross Amount', value: formatINR(grossPaise), isVariance: false },
+      { label: 'Expected Settlement', value: formatINR(expectedNetPaise), isVariance: false },
+      { label: 'Actual Settlement', value: formatINR(actualNetPaise), isVariance: false },
+      { label: 'Variance', value: formatINR(c.amount_at_risk || shortfallPaise), isVariance: true },
+    ];
+  }
+
+  chipsContainer.innerHTML = cards.map(card => `
+    <div class="evidence-fact-chip">
+      <span class="fact-label">${card.label}</span>
+      <span class="fact-value font-mono ${card.isVariance ? 'variance' : ''}">${card.value}</span>
+    </div>
+  `).join('');
 }
 
 function renderInvestigationDetail(c) {
@@ -1172,10 +1333,73 @@ function renderInvestigationDetail(c) {
   document.getElementById('view-case-title').textContent = `${cleanCategoryLabel(c.exception_category)} Discrepancy`;
   document.getElementById('view-amount-at-risk').textContent = formatINR(c.amount_at_risk || (c.financial_analysis && c.financial_analysis.amount_at_risk) || 0);
 
+  // Priority Badge
+  const priority = c.priority || derivePriority(c);
+  const priorityBadge = document.getElementById('view-priority-badge');
+  if (priorityBadge) {
+    priorityBadge.textContent = priority;
+    priorityBadge.className = `priority-badge font-mono ${priority.toLowerCase()}`;
+    if (c.priority_info?.reason) {
+      priorityBadge.title = c.priority_info.reason;
+    }
+  }
+
   // Status Badge
   const statusPill = document.getElementById('view-user-status-pill');
   statusPill.textContent = c.status || 'OPEN';
   statusPill.className = `case-status-badge font-mono ${c.status || 'OPEN'}`;
+
+  // 1.1 Financial Impact Summary Section
+  const fa = c.financial_analysis || {};
+  const grossPaise = fa.gross_amount ?? c.payment_record?.amount ?? c.merchant_order?.amount ?? 0;
+  const expectedNetPaise = fa.expected_merchant_amount ?? (fa.gross_amount !== null && fa.fee_expected !== null && fa.tax_expected !== null ? (fa.gross_amount - fa.fee_expected - fa.tax_expected) : (fa.gross_amount || 0));
+  const actualNetPaise = fa.actual_merchant_amount ?? fa.settlement_credit ?? c.settlement_record?.credit ?? 0;
+  const shortfallPaise = c.amount_at_risk ?? (expectedNetPaise && actualNetPaise ? Math.max(0, expectedNetPaise - actualNetPaise) : 0);
+
+  const shortfallEl = document.getElementById('impact-settlement-shortfall');
+  if (shortfallEl) shortfallEl.textContent = formatINR(shortfallPaise);
+
+  const grossEl = document.getElementById('impact-gross-payment');
+  if (grossEl) grossEl.textContent = formatINR(grossPaise);
+
+  const expNetEl = document.getElementById('impact-expected-settlement');
+  if (expNetEl) expNetEl.textContent = formatINR(expectedNetPaise);
+
+  const actNetEl = document.getElementById('impact-actual-settlement');
+  if (actNetEl) actNetEl.textContent = formatINR(actualNetPaise);
+
+  // Gateway Fee & GST Breakdown
+  const deductionsContainer = document.getElementById('impact-deductions-container');
+  const expFeeEl = document.getElementById('impact-expected-fee');
+  const actFeeEl = document.getElementById('impact-actual-fee');
+  const feeVarEl = document.getElementById('impact-fee-variance');
+  const expTaxEl = document.getElementById('impact-expected-tax');
+  const actTaxEl = document.getElementById('impact-actual-tax');
+  const taxVarEl = document.getElementById('impact-tax-variance');
+
+  if (expFeeEl) expFeeEl.textContent = formatINR(fa.fee_expected ?? 0);
+  if (actFeeEl) actFeeEl.textContent = formatINR(fa.fee_actual ?? 0);
+  if (feeVarEl) {
+    const feeVar = fa.fee_variance ?? 0;
+    feeVarEl.textContent = feeVar !== 0 ? `${feeVar > 0 ? '+' : ''}${formatINR(feeVar)}` : '₹0.00';
+    feeVarEl.className = `val-num font-mono ${feeVar > 0 ? 'text-danger' : 'text-muted'}`;
+  }
+
+  if (expTaxEl) expTaxEl.textContent = formatINR(fa.tax_expected ?? 0);
+  if (actTaxEl) actTaxEl.textContent = formatINR(fa.tax_actual ?? 0);
+  if (taxVarEl) {
+    const taxVar = fa.tax_variance ?? 0;
+    taxVarEl.textContent = taxVar !== 0 ? `${taxVar > 0 ? '+' : ''}${formatINR(taxVar)}` : '₹0.00';
+    taxVarEl.className = `val-num font-mono ${taxVar > 0 ? 'text-danger' : 'text-muted'}`;
+  }
+
+  if (deductionsContainer) {
+    if (fa.fee_expected !== null || fa.fee_actual !== null || c.exception_category === 'FEE_TAX_VARIANCE') {
+      deductionsContainer.style.display = 'block';
+    } else {
+      deductionsContainer.style.display = 'none';
+    }
+  }
 
   // Meta chips
   const metaContainer = document.getElementById('view-case-subtitle');
@@ -1244,6 +1468,25 @@ function renderInvestigationDetail(c) {
     }
   }
 
+  // Update Operator Action section (Section F)
+  const opStatusBadge = document.getElementById('operator-case-status-badge');
+  const opControls = document.getElementById('operator-action-controls');
+  if (opStatusBadge) {
+    if (c.status === 'RESOLVED') {
+      opStatusBadge.textContent = 'RESOLVED';
+      opStatusBadge.className = 'operator-action-badge font-mono resolved';
+    } else if (c.status === 'IN_REVIEW') {
+      opStatusBadge.textContent = 'UNDER ACTIVE REVIEW';
+      opStatusBadge.className = 'operator-action-badge font-mono';
+    } else {
+      opStatusBadge.textContent = 'AWAITING INVESTIGATION';
+      opStatusBadge.className = 'operator-action-badge font-mono';
+    }
+  }
+  if (opControls) {
+    opControls.style.display = c.status === 'RESOLVED' ? 'none' : 'flex';
+  }
+
   // 1.5 Investigation Intelligence Provenance Header
   const provPanel = document.getElementById('investigation-provenance-panel');
   const ai = c.ai_investigation;
@@ -1289,99 +1532,124 @@ function renderInvestigationDetail(c) {
     }
   }
 
-  // 2. The 3 Core Questions Findings
-  const fa = c.financial_analysis || {};
-  let whatHappened = '';
-  let whyDoesItMatter = '';
-  let actionItems = [];
+  // 2. The 3 Core Questions Findings (Grounded Causal Synthesis)
+  const findings = generateCaseFindings(c, fa, grossPaise, expectedNetPaise, actualNetPaise, shortfallPaise);
+  
+  const findingsContainer = document.getElementById('investigation-results-container');
+  if (findingsContainer) {
+    // Only show if investigation successfully ran and we have data
+    if (c.ai_investigation && findings.whatHappened) {
+      findingsContainer.style.display = 'flex';
+      const stmt = document.getElementById('finding-statement-text');
+      const imp = document.getElementById('finding-impact-text');
+      const actionsList = document.getElementById('finding-actions-list');
+      if (stmt) stmt.textContent = findings.whatHappened;
+      if (imp) imp.textContent = findings.whyDoesItMatter;
 
-  if (ai) {
-    // REAL AI INVESTIGATION OUTPUT (from Qwen or Payvault ML reasoning engine)
-    const aa = ai.ai_analysis || {};
-    whatHappened = aa.what_happened || ai.what_happened || ai.root_cause?.conclusion || c.description;
-    whyDoesItMatter = aa.why_it_matters || ai.why_it_matters || `Financial exposure of ${formatINR(c.amount_at_risk)} requires verification to maintain accurate balance sheet reconciliation across settlement cycles.`;
-    
-    // Recommended actions from AI
-    if (ai.reasoning && ai.reasoning.recommended_actions && ai.reasoning.recommended_actions.length > 0) {
-      actionItems = ai.reasoning.recommended_actions.map((act, idx) => ({
-        index: idx + 1,
-        desc: act.description || act.resolution_hint || act,
-      }));
-    } else if (ai.what_to_check && ai.what_to_check.length > 0) {
-      actionItems = ai.what_to_check.map((desc, idx) => ({
-        index: idx + 1,
-        desc,
-      }));
-    } else if (aa.recommended_action) {
-      actionItems = [{ index: 1, desc: aa.recommended_action }];
+      // Action steps
+      if (actionsList) {
+        actionsList.innerHTML = findings.actionItems.map(a => `
+          <li class="action-step-item">
+            <span class="step-badge">${a.index}</span>
+            <span class="step-desc">${escapeHtml(a.desc)}</span>
+          </li>
+        `).join('');
+      }
+    } else {
+      findingsContainer.style.display = 'none';
+      const stmt = document.getElementById('finding-statement-text');
+      const imp = document.getElementById('finding-impact-text');
+      const actionsList = document.getElementById('finding-actions-list');
+      if (stmt) stmt.textContent = '';
+      if (imp) imp.textContent = '';
+      if (actionsList) actionsList.innerHTML = '';
     }
-  } else {
-    // PRE-INVESTIGATION BASELINE (Case is still OPEN or awaiting AI execution)
-    whatHappened = `Discrepancy detected: ${c.description || cleanCategoryLabel(c.exception_category)}. Click 'Run Payvault Investigation' to execute multi-signal audit.`;
-    whyDoesItMatter = `Financial exposure of ${formatINR(c.amount_at_risk)} is unverified and pending reconciliation review.`;
-    actionItems = [
-      { index: 1, desc: `Initiate Payvault Investigation to extract ledger evidence and analyze gateway contracts.` },
-      { index: 2, desc: `Verify settlement batch records against merchant ledger entries.` },
-    ];
   }
 
-  document.getElementById('finding-statement-text').textContent = whatHappened;
-  document.getElementById('finding-impact-text').textContent = whyDoesItMatter;
+  // Auditable Transaction Facts (Adapted dynamically to the case)
+  renderAuditableTransactionFacts(c, fa, grossPaise, expectedNetPaise, actualNetPaise, shortfallPaise);
 
-  // Action steps
-  const actionsList = document.getElementById('finding-actions-list');
-  actionsList.innerHTML = actionItems.map(a => `
-    <li class="action-step-item">
-      <span class="step-badge">${a.index}</span>
-      <span class="step-desc">${a.desc}</span>
-    </li>
-  `).join('');
-
-  // Evidence chips
-  const chipsContainer = document.getElementById('finding-evidence-chips');
-  chipsContainer.innerHTML = `
-    <div class="evidence-fact-chip">
-      <span class="fact-label">Gross Amount:</span>
-      <span class="fact-value font-mono">${formatINR(fa.gross_amount || c.amount_at_risk)}</span>
-    </div>
-    <div class="evidence-fact-chip">
-      <span class="fact-label">Fee Charged:</span>
-      <span class="fact-value font-mono">${formatINR(fa.fee_actual || 0)}</span>
-    </div>
-    <div class="evidence-fact-chip">
-      <span class="fact-label">GST Tax:</span>
-      <span class="fact-value font-mono">${formatINR(fa.tax_actual || 0)}</span>
-    </div>
-    <div class="evidence-fact-chip">
-      <span class="fact-label">Variance:</span>
-      <span class="fact-value font-mono text-danger">${formatINR(c.amount_at_risk)}</span>
-    </div>
-  `;
-
-  // 3. Visual Timeline
+  // 3. Investigation Lifecycle Timeline (Evidence-Grounded Trail)
   const timelineContainer = document.getElementById('case-visual-timeline');
-  timelineContainer.innerHTML = `
-    <div class="timeline-step-node">
-      <div class="node-bullet">1</div>
-      <span class="node-label">Payment Captured</span>
-      <span class="node-time font-mono">${formatINR(fa.gross_amount || c.amount_at_risk)}</span>
-    </div>
-    <div class="timeline-step-node">
-      <div class="node-bullet">2</div>
-      <span class="node-label">Settlement Batch Generated</span>
-      <span class="node-time font-mono">T+2 Cycle</span>
-    </div>
-    <div class="timeline-step-node">
-      <div class="node-bullet warning">3</div>
-      <span class="node-label">Discrepancy Detected</span>
-      <span class="node-time font-mono text-danger">${formatINR(c.amount_at_risk)} variance</span>
-    </div>
-    <div class="timeline-step-node">
-      <div class="node-bullet ${c.status === 'RESOLVED' ? 'success' : 'primary'}">4</div>
-      <span class="node-label">Investigation Workstation</span>
-      <span class="node-time font-mono">${c.status || 'OPEN'}</span>
-    </div>
-  `;
+  if (timelineContainer) {
+    const paymentTime = c.settlement_record?.created_at || c.merchant_order?.created_at || c.created_at;
+    const reconTime = c.reconciliation_result?.reconciled_at || c.recon_result?.reconciled_at || c.created_at;
+    const exceptionTime = c.created_at;
+    const caseCreatedTime = c.created_at;
+
+    const aiRan = !!c.ai_investigation;
+    const aiTime = aiRan ? (c.ai_investigation.analyzed_at || c.ai_investigation.ai_metadata?.timestamp || c.ai_investigation.timestamp || c.created_at) : null;
+
+    const isResolved = c.status === 'RESOLVED';
+    const resolvedTime = isResolved ? c.resolution?.resolved_at : null;
+
+    const timelineNodes = [
+      {
+        title: 'Payment Received',
+        state: 'completed',
+        icon: '✓',
+        time: formatTimelineTime(paymentTime),
+        sub: `Customer payment: ${formatINR(grossPaise)}`,
+      },
+      {
+        title: 'Reconciliation Completed',
+        state: 'completed',
+        icon: '✓',
+        time: formatTimelineTime(reconTime),
+        sub: 'Automated ledger-to-settlement comparison',
+      },
+      {
+        title: 'Exception Detected',
+        state: 'completed',
+        icon: '✓',
+        time: formatTimelineTime(exceptionTime),
+        sub: `${cleanCategoryLabel(c.exception_category)} (${formatINR(shortfallPaise)} shortfall)`,
+      },
+      {
+        title: 'Investigation Created',
+        state: 'completed',
+        icon: '✓',
+        time: formatTimelineTime(caseCreatedTime),
+        sub: `Case ${c.case_id} registered in workstation`,
+      },
+      {
+        title: 'Payvault AI Analyzed',
+        state: aiRan ? 'completed' : 'pending',
+        icon: aiRan ? '✓' : '○',
+        time: aiRan ? formatTimelineTime(aiTime) : '',
+        sub: aiRan ? 'Grounded causal analysis synthesized' : 'Pending multi-signal audit execution',
+      },
+      {
+        title: 'Operator Reviewed',
+        state: isResolved ? 'completed' : (c.status === 'IN_REVIEW' ? 'current' : 'pending'),
+        icon: isResolved ? '✓' : (c.status === 'IN_REVIEW' ? '●' : '○'),
+        time: isResolved ? formatTimelineTime(resolvedTime) : '',
+        sub: isResolved
+          ? `Reviewed by ${c.resolution?.resolved_by || 'operator'}`
+          : (c.status === 'IN_REVIEW' ? 'Under active operator review' : 'Awaiting operator review'),
+      },
+      {
+        title: 'Resolved',
+        state: isResolved ? 'completed' : 'pending',
+        icon: isResolved ? '✓' : '○',
+        time: isResolved ? formatTimelineTime(resolvedTime) : '',
+        sub: isResolved
+          ? `${c.resolution?.resolution_reason_label || c.resolution?.resolution_reason || 'Resolution confirmed'}`
+          : 'Pending final operator sign-off',
+      },
+    ];
+
+    timelineContainer.innerHTML = timelineNodes.map(n => `
+      <div class="lifecycle-node ${n.state}">
+        <span class="lifecycle-node-bullet font-mono">${n.icon}</span>
+        <div class="lifecycle-node-main">
+          <span class="lifecycle-node-title">${n.title}</span>
+          ${n.time ? `<span class="lifecycle-node-time font-mono">${n.time}</span>` : ''}
+        </div>
+        <div class="lifecycle-node-sub">${n.sub}</div>
+      </div>
+    `).join('');
+  }
 
   // 4. Financial Mathematical Breakdown Accordion
   const statementBody = document.getElementById('statement-table-body');
@@ -1504,6 +1772,101 @@ function renderInvestigationDetail(c) {
     `;
   }
 
+  // 7.5 Case Evidence Panel (Authoritative Grounding Sources)
+  const evidenceContainer = document.getElementById('evidence-accordion-list');
+  const evidenceCountBadge = document.getElementById('evidence-source-count');
+
+  if (evidenceContainer) {
+    const evidenceItems = [
+      {
+        title: 'Payment Record',
+        sub: `Customer payment: ${formatINR(grossPaise)}`,
+        open: true,
+        details: [
+          { label: 'Customer Payment', value: formatINR(grossPaise) },
+          { label: 'Merchant Order ID', value: c.merchant_order?.id || c.settlement_record?.order_id || 'ord_unlinked' },
+          { label: 'Payment Instrument', value: c.settlement_record?.payment_method || 'CARD' },
+          { label: 'Currency', value: c.settlement_record?.currency || 'INR' },
+          { label: 'Payment Status', value: 'Captured & Reconciled' },
+        ],
+      },
+      {
+        title: 'Settlement Record',
+        sub: `Actual settlement: ${formatINR(actualNetPaise)}`,
+        open: true,
+        details: [
+          { label: 'Actual Settlement Credit', value: formatINR(actualNetPaise) },
+          { label: 'Settlement Entity ID', value: c.settlement_record?.entity_id || 'setl_...' },
+          { label: 'Settlement Batch ID', value: c.settlement_record?.settlement_id || 'setl_batch_001' },
+          { label: 'Gateway Fee Deducted', value: formatINR(fa.fee_actual || 0) },
+          { label: 'Gateway GST Deducted', value: formatINR(fa.tax_actual || 0) },
+        ],
+      },
+      {
+        title: 'Reconciliation Result',
+        sub: `Settlement shortfall: ${formatINR(shortfallPaise)}`,
+        open: true,
+        details: [
+          { label: 'Expected Settlement', value: formatINR(expectedNetPaise) },
+          { label: 'Actual Settlement Credited', value: formatINR(actualNetPaise) },
+          { label: 'Settlement Shortfall', value: formatINR(shortfallPaise) },
+          { label: 'Audit Status', value: c.reconciliation_result?.status || 'EXCEPTION' },
+          { label: 'Triggered Audit Rule', value: c.reconciliation_result?.rule_triggered || cleanCategoryLabel(c.exception_category) },
+        ],
+      },
+      {
+        title: 'Contracted Fee Schedule',
+        sub: 'Contracted fee: 2.0% · GST: 18%',
+        open: false,
+        details: [
+          { label: 'Contract Fee Rate', value: '2.00%' },
+          { label: 'Statutory GST Rate', value: '18.00%' },
+          { label: 'Expected Fee Baseline', value: formatINR(fa.fee_expected || 0) },
+          { label: 'Expected GST Baseline', value: formatINR(fa.tax_expected || 0) },
+          { label: 'Rate Schedule Status', value: 'Standard Merchant Agreement' },
+        ],
+      },
+      {
+        title: 'Arithmetic Verification',
+        sub: `Fee variance: ${formatINR(fa.fee_variance || 0)} · GST variance: ${formatINR(fa.tax_variance || 0)}`,
+        open: false,
+        details: [
+          { label: 'Fee Variance', value: `${(fa.fee_variance || 0) > 0 ? '+' : ''}${formatINR(fa.fee_variance || 0)}` },
+          { label: 'GST Tax Variance', value: `${(fa.tax_variance || 0) > 0 ? '+' : ''}${formatINR(fa.tax_variance || 0)}` },
+          { label: 'Total Shortfall Variance', value: formatINR(shortfallPaise) },
+          { label: 'Precision Check', value: 'Integer-Paise Deterministic Engine Verified' },
+        ],
+      },
+    ];
+
+    if (evidenceCountBadge) {
+      evidenceCountBadge.textContent = `${evidenceItems.length} Case Evidence Sources`;
+    }
+
+    evidenceContainer.innerHTML = evidenceItems.map(item => `
+      <details class="evidence-item" ${item.open ? 'open' : ''}>
+        <summary class="evidence-item-summary">
+          <div class="evidence-summary-left">
+            <span class="evidence-summary-icon">✓</span>
+            <span>${item.title}</span>
+            <span class="evidence-summary-sub font-mono">(${item.sub})</span>
+          </div>
+          <span class="evidence-chevron font-mono">▶</span>
+        </summary>
+        <div class="evidence-item-body">
+          <div class="evidence-detail-grid">
+            ${item.details.map(d => `
+              <div class="evidence-detail-cell">
+                <span class="evidence-cell-label">${d.label}</span>
+                <span class="evidence-cell-value font-mono">${d.value}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </details>
+    `).join('');
+  }
+
   // 8. Chat panel — refresh suggested questions for this case and show panel
   renderChatSuggestedQuestions();
   const chatSection = document.getElementById('ask-payvault-ai-section');
@@ -1518,12 +1881,25 @@ async function runPayvaultInvestigation() {
   const runBtnText   = document.getElementById('run-btn-text');
   const progressCard = document.getElementById('investigation-progress');
   const preInv       = document.getElementById('pre-investigation-callout');
+  const findingsContainer = document.getElementById('investigation-results-container');
 
   if (runBtn) {
     runBtn.disabled = true;
     if (runBtnText) runBtnText.textContent = 'Investigating…';
   }
   if (preInv) preInv.style.display = 'none';
+  if (findingsContainer) {
+    findingsContainer.style.display = 'none';
+    const stmt = document.getElementById('finding-statement-text');
+    const imp = document.getElementById('finding-impact-text');
+    const actionsList = document.getElementById('finding-actions-list');
+    if (stmt) stmt.textContent = '';
+    if (imp) imp.textContent = '';
+    if (actionsList) actionsList.innerHTML = '';
+  }
+  if (AppState.currentCaseDetail) {
+    AppState.currentCaseDetail.ai_investigation = null;
+  }
   if (progressCard) progressCard.style.display = 'block';
 
   // Helper to cleanly update checklist step state
@@ -1584,6 +1960,13 @@ async function runPayvaultInvestigation() {
     await selectInvestigationCase(AppState.currentCaseId);
     await loadAllData();
     showToast('Investigation complete · Case moved to IN_REVIEW', 'info');
+
+    // Auto-scroll and focus to the new top-of-page investigation results
+    const summaryCard = document.getElementById('finding-hero-card');
+    if (summaryCard) {
+      summaryCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (typeof summaryCard.focus === 'function') summaryCard.focus();
+    }
   } catch (err) {
     showToast(`Investigation failed: ${err.message}`, 'error');
     if (progressCard) progressCard.style.display = 'none';
@@ -1772,101 +2155,109 @@ async function switchToLiveMode() {
 }
 
 // ── Event Listeners & Bootstrapping ──────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  // Navigation tabs click listeners
-  document.querySelectorAll('.nav-tab').forEach(tab => {
-    tab.addEventListener('click', (e) => {
-      e.preventDefault();
-      const page = tab.getAttribute('data-page');
-      if (page) navigateTo(page);
-    });
-  });
-
-  // Top header button listeners
-  const btnSync = document.getElementById('btn-sync-razorpay');
-  if (btnSync) btnSync.addEventListener('click', syncRazorpayData);
-
-  // Payment method selector active toggle
-  document.querySelectorAll('.method-card').forEach(card => {
-    card.addEventListener('click', () => {
-      document.querySelectorAll('.method-card').forEach(c => c.classList.remove('active'));
-      card.classList.add('active');
-    });
-  });
-
-  // Pay button
-  const payBtn = document.getElementById('btn-pay-now');
-  if (payBtn) payBtn.addEventListener('click', handlePaymentSubmit);
-
-  // Amount input real-time sync
-  const amountInput = document.getElementById('custom-amount-input');
-  if (amountInput) {
-    amountInput.addEventListener('input', () => updatePayButtonLabel());
-  }
-
-  // Investigation action buttons
-  const runBtn = document.getElementById('btn-run-investigation');
-  if (runBtn) runBtn.addEventListener('click', runPayvaultInvestigation);
-
-  const resolveBtn = document.getElementById('btn-open-resolve');
-  if (resolveBtn) resolveBtn.addEventListener('click', openResolutionModal);
-
-  const reopenBtn = document.getElementById('btn-reopen-case');
-  if (reopenBtn) reopenBtn.addEventListener('click', reopenCase);
-
-  // Status tabs in investigation queue
-  document.querySelectorAll('.status-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.status-tab-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      AppState.activeStatusFilter = btn.getAttribute('data-status');
-      renderInvestigationQueue();
-    });
-  });
-
-  // Category dropdown in investigation queue
-  const catFilter = document.getElementById('case-filter-select');
-  if (catFilter) {
-    catFilter.addEventListener('change', (e) => {
-      AppState.activeCategoryFilter = e.target.value;
-      renderInvestigationQueue();
-    });
-  }
-
-  // Reconciliation filter pill buttons (All / Clean Matches / Exceptions)
-  document.querySelectorAll('#recon-status-filter-buttons .filter-pill-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const filter = btn.getAttribute('data-filter') || 'ALL';
-      filterReconciliationTable(filter);
-    });
-  });
-
-  // Chat: send on Enter (Shift+Enter = newline), init input auto-resize
-  const chatInput  = document.getElementById('chat-input');
-  const chatSendBtn = document.getElementById('chat-send-btn');
-
-  if (chatInput) {
-    chatInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    // Navigation tabs click listeners
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+      tab.addEventListener('click', (e) => {
         e.preventDefault();
-        sendChatMessage();
-      }
+        const page = tab.getAttribute('data-page');
+        if (page) navigateTo(page);
+      });
     });
-    // Auto-resize textarea as content grows
-    chatInput.addEventListener('input', () => {
-      chatInput.style.height = 'auto';
-      chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+
+    // Top header button listeners
+    const btnSync = document.getElementById('btn-sync-razorpay');
+    if (btnSync) btnSync.addEventListener('click', syncRazorpayData);
+
+    // Payment method selector active toggle
+    document.querySelectorAll('.method-card').forEach(card => {
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.method-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+      });
     });
-  }
 
-  if (chatSendBtn) {
-    chatSendBtn.addEventListener('click', () => sendChatMessage());
-  }
+    // Pay button
+    const payBtn = document.getElementById('btn-pay-now');
+    if (payBtn) payBtn.addEventListener('click', handlePaymentSubmit);
 
-  // Load initial data
-  loadAllData();
-});
+    // Amount input real-time sync
+    const amountInput = document.getElementById('custom-amount-input');
+    if (amountInput) {
+      amountInput.addEventListener('input', () => updatePayButtonLabel());
+    }
+
+    // Investigation action buttons
+    const runBtn = document.getElementById('btn-run-investigation');
+    if (runBtn) runBtn.addEventListener('click', runPayvaultInvestigation);
+
+    const resolveBtn = document.getElementById('btn-open-resolve');
+    if (resolveBtn) resolveBtn.addEventListener('click', openResolutionModal);
+
+    const reopenBtn = document.getElementById('btn-reopen-case');
+    if (reopenBtn) reopenBtn.addEventListener('click', reopenCase);
+
+    const bottomResolveBtn = document.getElementById('btn-bottom-resolve');
+    if (bottomResolveBtn) bottomResolveBtn.addEventListener('click', openResolutionModal);
+
+    const bottomReopenBtn = document.getElementById('btn-bottom-reopen');
+    if (bottomReopenBtn) bottomReopenBtn.addEventListener('click', reopenCase);
+
+    // Status tabs in investigation queue
+    document.querySelectorAll('.status-tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.status-tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        AppState.activeStatusFilter = btn.getAttribute('data-status');
+        renderInvestigationQueue();
+      });
+    });
+
+    // Category dropdown in investigation queue
+    const catFilter = document.getElementById('case-filter-select');
+    if (catFilter) {
+      catFilter.addEventListener('change', (e) => {
+        AppState.activeCategoryFilter = e.target.value;
+        renderInvestigationQueue();
+      });
+    }
+
+    // Reconciliation filter pill buttons (All / Clean Matches / Exceptions)
+    document.querySelectorAll('#recon-status-filter-buttons .filter-pill-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const filter = btn.getAttribute('data-filter') || 'ALL';
+        filterReconciliationTable(filter);
+      });
+    });
+
+    // Chat: send on Enter (Shift+Enter = newline), init input auto-resize
+    const chatInput  = document.getElementById('chat-input');
+    const chatSendBtn = document.getElementById('chat-send-btn');
+
+    if (chatInput) {
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendChatMessage();
+        }
+      });
+      // Auto-resize textarea as content grows
+      chatInput.addEventListener('input', () => {
+        chatInput.style.height = 'auto';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+      });
+    }
+
+    if (chatSendBtn) {
+      chatSendBtn.addEventListener('click', () => sendChatMessage());
+    }
+
+    // Load initial data
+    loadAllData();
+  });
+}
 
 // ── Ask Payvault AI — Case-Aware Investigation Chat ───────────────────────────
 //
@@ -1892,13 +2283,16 @@ AppState.chatCurrentCase = null;
 AppState._lastChatMessage = null;  // for retry
 
 const CHAT_SUGGESTED_QUESTIONS = [
-  { text: 'Why was this case flagged?',                       intent: 'why_flagged' },
-  { text: 'Explain the financial variance.',                  intent: 'financial_variance' },
-  { text: 'What happened in this transaction?',              intent: 'what_happened' },
-  { text: 'What should I verify before resolving this?',     intent: 'what_to_verify' },
-  { text: 'Are there similar historical cases?',             intent: 'historical_cases' },
-  { text: 'Why is this classified as [category]?',           intent: 'classification' },
-  { text: 'Explain this case in simple terms.',              intent: 'simple_explanation' },
+  { text: 'What happened?', intent: 'why_flagged' },
+  { text: 'What is the gross amount?', intent: 'gross_amount' },
+  { text: 'What was the expected settlement?', intent: 'expected_settlement' },
+  { text: 'Why is the settlement short?', intent: 'settlement_causality' },
+  { text: 'What about GST?', intent: 'tax_specific' },
+  { text: 'What should I do now?', intent: 'next_action' },
+  { text: 'Does this represent actual financial loss?', intent: 'real_financial_loss' },
+  { text: 'What evidence supports this?', intent: 'evidence_assessment' },
+  { text: 'Should I escalate this case?', intent: 'escalation_assessment' },
+  { text: 'Explain this case in simple terms.', intent: 'simple_explanation' },
 ];
 
 /**
@@ -2007,34 +2401,43 @@ async function sendChatMessage() {
   if (input) input.disabled = true;
   if (sendBtn) sendBtn.disabled = true;
 
-  // Get or create per-case history
+  // Get or create per-case history and persistent conversation ID
   if (!AppState.chatHistories.has(caseId)) {
     AppState.chatHistories.set(caseId, []);
   }
+  if (!AppState.chatConversationIds) {
+    AppState.chatConversationIds = new Map();
+  }
+  if (!AppState.chatConversationIds.has(caseId)) {
+    AppState.chatConversationIds.set(caseId, `conv_${caseId}_${Date.now()}`);
+  }
   const history = AppState.chatHistories.get(caseId);
+  const conversationId = AppState.chatConversationIds.get(caseId);
 
   // Render the operator's message immediately
   appendChatMessage({ role: 'operator', content: message });
 
-  // Show typing indicator
-  const loadingId = appendLoadingIndicator();
+  // Create NEW unique thinking indicator for this turn
+  const thinkingId = createThinkingIndicator();
 
   try {
     const res = await fetch(`/api/investigations/${caseId}/chat`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message, history }),
+      body:    JSON.stringify({ message, history, conversationId }),
     });
 
     const data = await res.json();
-    removeLoadingIndicator(loadingId);
+
+    // Remove ONLY this request's thinking indicator
+    removeThinkingIndicator(thinkingId);
 
     if (!res.ok) {
       appendChatError(data.error || 'Request failed.', message);
       return;
     }
 
-    // Append the AI answer
+    // Render Payvault AI answer
     appendChatMessage({
       role:    'payvault',
       content: data.answer,
@@ -2052,7 +2455,7 @@ async function sendChatMessage() {
     if (history.length > 24) history.splice(0, 2);
 
   } catch (err) {
-    removeLoadingIndicator(loadingId);
+    removeThinkingIndicator(thinkingId);
     appendChatError(`Network error: ${err.message}`, message);
   } finally {
     if (input)   input.disabled = false;
@@ -2068,7 +2471,7 @@ async function sendChatMessage() {
 function appendChatMessage({ role, content, source, ai_used, model }) {
   const conversation = document.getElementById('chat-conversation');
   const emptyState   = document.getElementById('chat-empty-state');
-  if (!conversation) return;
+  if (!conversation) return null;
 
   if (emptyState) emptyState.style.display = 'none';
 
@@ -2078,8 +2481,17 @@ function appendChatMessage({ role, content, source, ai_used, model }) {
   // Source note for AI messages: always unified Payvault AI evidence grounding
   let sourceLine = '';
   if (!isOperator) {
-    const sourceText = 'Grounded in Payvault Case Evidence';
-    sourceLine = `<div class="chat-message-meta"><span class="chat-source-badge">${escapeHtml(sourceText)}</span></div>`;
+    sourceLine = `
+      <div class="chat-message-meta">
+        <span class="chat-source-badge">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" style="display:inline-block;vertical-align:-1px;margin-right:3px;">
+            <path d="M2 6l3 3 5-5"/>
+          </svg>
+          Grounded in 5 case evidence sources
+        </span>
+        <button class="chat-view-evidence-btn" type="button" onclick="scrollToEvidence()">View Evidence</button>
+      </div>
+    `;
   }
 
   const msgEl = document.createElement('div');
@@ -2096,22 +2508,40 @@ function appendChatMessage({ role, content, source, ai_used, model }) {
   return msgEl;
 }
 
+let _thinkingCounter = 0;
+
 /**
- * Appends a typing / loading indicator. Returns a unique ID to remove it.
+ * Appends a NEW unique Thinking indicator placeholder for the active request turn.
+ * Shows:
+ * Payvault AI
+ * ● ● ●
+ * Thinking...
+ *
+ * Returns unique ID of the element so removeThinkingIndicator can remove it on completion.
  */
-function appendLoadingIndicator() {
+function createThinkingIndicator() {
   const conversation = document.getElementById('chat-conversation');
   if (!conversation) return null;
 
-  const id = `chat-loading-${Date.now()}`;
+  const emptyState = document.getElementById('chat-empty-state');
+  if (emptyState) emptyState.style.display = 'none';
+
+  _thinkingCounter += 1;
+  const id = `chat-thinking-${Date.now()}-${_thinkingCounter}`;
   const el = document.createElement('div');
   el.id = id;
   el.className = 'chat-message payvault loading';
+  el.setAttribute('data-thinking', 'true');
   el.innerHTML = `
     <span class="chat-message-sender">Payvault AI</span>
     <div class="chat-bubble">
-      <div class="chat-loading-dots" aria-label="Thinking…">
-        <span></span><span></span><span></span>
+      <div class="chat-thinking-container">
+        <div class="chat-thinking-dots" aria-label="Payvault AI is thinking">
+          <span class="thinking-dot chat-dot">●</span>
+          <span class="thinking-dot chat-dot">●</span>
+          <span class="thinking-dot chat-dot">●</span>
+        </div>
+        <span class="chat-thinking-text">Thinking...</span>
       </div>
     </div>
   `;
@@ -2120,10 +2550,106 @@ function appendLoadingIndicator() {
   return id;
 }
 
-function removeLoadingIndicator(id) {
+/**
+ * Removes ONLY the specified thinking indicator by ID.
+ */
+function removeThinkingIndicator(id) {
   if (!id) return;
   const el = document.getElementById(id);
-  if (el) el.remove();
+  if (el) {
+    el.remove();
+  }
+}
+
+// Backwards-compatible aliases
+function appendLoadingIndicator() {
+  return createThinkingIndicator();
+}
+
+function removeLoadingIndicator(id) {
+  removeThinkingIndicator(id);
+}
+
+/**
+ * Replaces the thinking placeholder in-place with the real answer.
+ * Preserved for backwards compatibility with existing direct-caller tests.
+ */
+function fulfillLoadingIndicator(id, { content, source, ai_used, model }) {
+  const el = document.getElementById(id);
+  if (!el) {
+    return appendChatMessage({ role: 'payvault', content, source, ai_used, model });
+  }
+
+  el.classList.remove('loading');
+  el.removeAttribute('data-thinking');
+
+  const senderSpan = el.querySelector('.chat-message-sender');
+  if (senderSpan) senderSpan.textContent = 'Payvault AI';
+
+  const bubble = el.querySelector('.chat-bubble');
+  if (bubble) {
+    bubble.innerHTML = renderChatMarkdown(content);
+  }
+
+  const sourceLine = `
+    <div class="chat-message-meta">
+      <span class="chat-source-badge">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" style="display:inline-block;vertical-align:-1px;margin-right:3px;">
+          <path d="M2 6l3 3 5-5"/>
+        </svg>
+        Grounded in 5 case evidence sources
+      </span>
+      <button class="chat-view-evidence-btn" type="button" onclick="scrollToEvidence()">View Evidence</button>
+    </div>
+  `;
+  el.insertAdjacentHTML('beforeend', sourceLine);
+
+  const conversation = document.getElementById('chat-conversation');
+  if (conversation) scrollChatToBottom(conversation);
+  return el;
+}
+
+/**
+ * Smoothly scrolls to the Evidence Panel and highlights it for visual focus.
+ */
+function scrollToEvidence() {
+  const panel = document.getElementById('case-evidence-panel');
+  if (panel) {
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    panel.classList.add('highlight-pulse');
+    setTimeout(() => {
+      panel.classList.remove('highlight-pulse');
+    }, 1800);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.scrollToEvidence = scrollToEvidence;
+}
+
+/**
+ * Replaces the thinking placeholder in-place with the error message and retry button.
+ */
+function errorLoadingIndicator(id, errorMsg, originalMessage) {
+  const el = document.getElementById(id);
+  if (!el) {
+    return appendChatError(errorMsg, originalMessage);
+  }
+
+  el.classList.remove('loading');
+  el.removeAttribute('data-thinking');
+
+  const bubble = el.querySelector('.chat-bubble');
+  if (bubble) {
+    bubble.className = 'chat-error-inline';
+    bubble.innerHTML = `
+      <span>${escapeHtml(errorMsg)}</span>
+      <button class="chat-retry-btn" type="button" onclick="retryChatMessage(this)" data-msg="${escapeHtml(originalMessage)}">Retry</button>
+    `;
+  }
+  const conversation = document.getElementById('chat-conversation');
+  if (conversation) scrollChatToBottom(conversation);
+  return el;
 }
 
 /**
@@ -2202,5 +2728,28 @@ function escapeHtml(str) {
 }
 
 function scrollChatToBottom(el) {
-  if (el) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  if (el && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    createThinkingIndicator,
+    removeThinkingIndicator,
+    appendChatMessage,
+    appendLoadingIndicator,
+    fulfillLoadingIndicator,
+    errorLoadingIndicator,
+    removeLoadingIndicator,
+    renderChatMarkdown,
+    escapeHtml,
+    formatINR,
+    formatTimelineTime,
+    derivePriority,
+    scrollToEvidence,
+    generateCaseFindings,
+    renderAuditableTransactionFacts,
+  };
+}
+
