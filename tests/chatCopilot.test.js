@@ -19,9 +19,10 @@
 const request = require('supertest');
 const app     = require('../server');
 const store   = require('../src/store/dataStore');
+const fs      = require('fs');
+const path    = require('path');
 const { buildChatContext } = require('../src/investigation/chat/chatContextBuilder');
 const { generateNativeAnswer, analyzeIntent } = require('../src/investigation/chat/nativeReasoning');
-const { OllamaChatEngine } = require('../src/investigation/chat/ollamaChatEngine');
 const { buildCase } = require('../src/investigation/caseBuilder');
 const { buildIntelligenceContext } = require('../src/investigation/intelligence/context');
 const {
@@ -765,34 +766,19 @@ describe('Payvault AI Native Reasoning Test Suite', () => {
     });
   });
 
-  // ── Suite 10: Ollama Test Preserved (Module Tests Only) ───────────────────
-  // The OllamaChatEngine module is preserved for future experimentation.
-  // These tests verify the module itself is intact, but NOT called by chat.
-  describe('10. Ollama Module (Preserved, Isolated — Not in Active Chat Path)', () => {
+  // ── Suite 10: Ollama/Qwen Chat Engine Removal & Sole Native Payvault AI ───
+  // Verifies legacy OllamaChatEngine is completely removed.
+  // No external LLM calls are permitted in Payvault AI chat.
+  describe('10. Ollama/Qwen Removal & Sole Native Payvault AI Guarantee', () => {
 
-    test('OllamaChatEngine constructs messages correctly (module-level test)', () => {
-      const engine = new OllamaChatEngine({ model: 'qwen2.5:1.5b' });
-      const history = [
-        { role: 'operator', content: 'Why was this flagged?' },
-        { role: 'payvault', content: 'Discrepancy detected.' },
-      ];
-
-      const messages = engine._buildChatMessages('How much was the fee overcharge?', benchmarkCtx, history);
-
-      expect(Array.isArray(messages)).toBe(true);
-      expect(messages[0].role).toBe('system');
-      expect(messages[0].content).toContain('Payvault AI');
-      expect(messages[0].content).toContain('DETERMINISTIC FINANCIAL FACTS:');
+    test('Ollama chat engine file has been completely removed', () => {
+      const legacyPath = path.join(__dirname, '../src/investigation/chat/ollamaChatEngine.js');
+      expect(fs.existsSync(legacyPath)).toBe(false);
     });
 
-    test('Ollama system prompt contains mathematical integrity constraints', () => {
-      const engine = new OllamaChatEngine({ model: 'qwen2.5:1.5b' });
-      const messages = engine._buildChatMessages('what is the gst here', benchmarkCtx, []);
-      const systemMsg = messages.find(m => m.role === 'system');
-
-      expect(systemMsg).toBeDefined();
-      expect(systemMsg.content).toContain('Actual GST (₹8.10) − Expected GST (₹3.60) = ₹4.50');
-      expect(systemMsg.content).toContain('₹0.90 is FALSE');
+    test('Chat architecture routes 100% to Payvault AI native reasoning', () => {
+      const { routeAndAnswerChat } = require('../src/investigation/chat/chatRouter');
+      expect(typeof routeAndAnswerChat).toBe('function');
     });
   });
 

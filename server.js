@@ -44,11 +44,41 @@ const exceptionsRoutes     = require('./src/routes/exceptions');
 const demoRoutes           = require('./src/routes/demo');
 const investigationsRoutes = require('./src/routes/investigations');
 const store                = require('./src/store/dataStore');
+const postgres             = require('./src/db/postgres');
+const redis                = require('./src/db/redis');
+const migrator             = require('./src/db/migrator');
 
 app.use('/api/reconciliation', reconciliationRoutes);
 app.use('/api/exceptions',     exceptionsRoutes);
 app.use('/api/demo',           demoRoutes);
 app.use('/api/investigations', investigationsRoutes);
+
+// ── GET /api/health — System & Infrastructure Health Check ────────────────────
+const handleHealth = (req, res) => {
+  const pgConnected = postgres.isAvailable();
+  const redisConnected = redis.isAvailable();
+
+  return res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime_seconds: Math.floor(process.uptime()),
+    database: {
+      status: pgConnected ? 'connected' : 'unavailable',
+      mode: postgres.getMode(),
+    },
+    redis: {
+      status: redisConnected ? 'connected' : 'unavailable',
+      mode: redis.getMode(),
+    },
+    razorpay: {
+      configured: !!(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET),
+      mode: 'test',
+    },
+  });
+};
+
+app.get('/api/health', handleHealth);
+app.get('/health',     handleHealth);
 
 // ── GET /api/config/status — Safe diagnostic status ──────────────────────────
 app.get('/api/config/status', (req, res) => {
@@ -331,11 +361,42 @@ app.post('/api/verify-payment', async (req, res) => {
   });
 });
 
+async function initDatabases() {
+  const pgConnected = await postgres.checkConnection();
+  if (pgConnected) {
+    try {
+      await migrator.runMigrations();
+      console.log('[Payvault Boot] Database migrations verified.');
+    } catch (err) {
+      console.error('[Payvault Boot] Error running migrations:', err.message);
+    }
+  }
+  await redis.checkConnection();
+}
+
+async function handleShutdown(signal) {
+  console.log(`\n[Payvault] Received ${signal}. Shutting down gracefully...`);
+  try {
+    await postgres.close();
+    await redis.close();
+    console.log('[Payvault] Database connections cleanly closed.');
+  } catch (err) {
+    console.error('[Payvault] Error during database shutdown:', err.message);
+  }
+  process.exit(0);
+}
+
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+
 // ── Start server ──────────────────────────────────────────────────────────────
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`\n🚀  Razorpay checkout server running at http://localhost:${PORT}\n`);
+  initDatabases().finally(() => {
+    app.listen(PORT, () => {
+      console.log(`\n🚀  Razorpay checkout server running at http://localhost:${PORT}\n`);
+    });
   });
 }
 
 module.exports = app;
+module.exports.initDatabases = initDatabases;

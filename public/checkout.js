@@ -997,9 +997,15 @@ function renderReconciliationTable(filter = 'ALL') {
           </span>
         </td>
         <td>
-          ${!isMatched && (r.exception_id || r.id) ? `
-            <button class="btn-ghost-sm" onclick="openInvestigationFromList('${r.exception_id || r.id}')" type="button">Investigate →</button>
-          ` : `
+          ${!isMatched ? (() => {
+            const matchedExc = (AppState.exceptions || []).find(e => e.reconciliation_result_id === r.id || e.id === r.exception_id || e.case_id === r.exception_id);
+            const canonicalCaseId = r.exception_id || matchedExc?.case_id || matchedExc?.id;
+            return canonicalCaseId ? `
+              <button class="btn-ghost-sm" onclick="openInvestigationFromList('${canonicalCaseId}')" type="button">Investigate →</button>
+            ` : `
+              <span class="text-muted" style="font-size:0.75rem;">Balanced</span>
+            `;
+          })() : `
             <span class="text-muted" style="font-size:0.75rem;">Balanced</span>
           `}
         </td>
@@ -1172,6 +1178,17 @@ function openInvestigationFromList(caseId) {
 }
 
 async function selectInvestigationCase(caseId) {
+  if (!caseId) return;
+
+  // Canonicalize caseId: if a reconciliation result ID (recon_...) was passed, resolve to its exception ID
+  if (typeof caseId === 'string' && caseId.startsWith('recon_')) {
+    const matchedExc = (AppState.exceptions || []).find(e => e.reconciliation_result_id === caseId);
+    if (matchedExc) {
+      console.warn(`[Investigation] Mapping reconciliation ID ${caseId} to canonical case ID ${matchedExc.case_id || matchedExc.id}`);
+      caseId = matchedExc.case_id || matchedExc.id;
+    }
+  }
+
   // Reset chat context whenever a new case is selected
   if (AppState.currentCaseId !== caseId) {
     resetChatForCase(caseId);
@@ -1201,6 +1218,7 @@ async function selectInvestigationCase(caseId) {
     if (!res.ok) throw new Error('Case not found');
     const caseData = await res.json();
     AppState.currentCaseDetail = caseData;
+    AppState.currentCaseId = caseData.case_id || caseData.id || caseId;
     renderInvestigationDetail(caseData);
   } catch (err) {
     console.error('[Investigation] Error fetching case:', err);
@@ -1875,7 +1893,21 @@ function renderInvestigationDetail(c) {
 
 // ── AI Investigation Runner (With Clean Inline Checklist Animation) ───────────
 async function runPayvaultInvestigation() {
-  if (!AppState.currentCaseId) return;
+  let targetCaseId = AppState.currentCaseId || AppState.currentCaseDetail?.case_id || AppState.currentCaseDetail?.id;
+  if (!targetCaseId) {
+    const displayedId = document.getElementById('view-case-id')?.textContent?.trim();
+    if (displayedId && displayedId.startsWith('exc_')) {
+      targetCaseId = displayedId;
+    }
+  }
+  if (typeof targetCaseId === 'string' && targetCaseId.startsWith('recon_')) {
+    const matchedExc = (AppState.exceptions || []).find(e => e.reconciliation_result_id === targetCaseId);
+    if (matchedExc) {
+      targetCaseId = matchedExc.case_id || matchedExc.id;
+    }
+  }
+  if (!targetCaseId) return;
+  AppState.currentCaseId = targetCaseId;
 
   const runBtn       = document.getElementById('btn-run-investigation');
   const runBtnText   = document.getElementById('run-btn-text');
@@ -1942,7 +1974,7 @@ async function runPayvaultInvestigation() {
   updateStep(4, 'active');
 
   try {
-    const res = await fetch(`/api/investigations/${AppState.currentCaseId}/run`, {
+    const res = await fetch(`/api/investigations/${targetCaseId}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -1956,8 +1988,11 @@ async function runPayvaultInvestigation() {
     // Smoothly hide inline progress card
     if (progressCard) progressCard.style.display = 'none';
 
-    // Reload case details & queue (moves case from OPEN to IN_REVIEW)
-    await selectInvestigationCase(AppState.currentCaseId);
+    // Update state and immediately render returned investigation findings
+    AppState.currentCaseDetail = data;
+    renderInvestigationDetail(data);
+
+    // Refresh application state and queue in background
     await loadAllData();
     showToast('Investigation complete · Case moved to IN_REVIEW', 'info');
 

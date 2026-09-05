@@ -92,7 +92,46 @@ CREATE TABLE IF NOT EXISTS investigation_events (
 
 CREATE INDEX IF NOT EXISTS idx_investigation_events_inv_id ON investigation_events(investigation_id);
 
--- 6. Audit Events (Immutable compliance ledger)
+-- 6. Refunds
+CREATE TABLE IF NOT EXISTS refunds (
+  id VARCHAR(128) PRIMARY KEY,
+  payment_id VARCHAR(128) REFERENCES payments(id) ON DELETE SET NULL,
+  amount_paise BIGINT NOT NULL CHECK (amount_paise >= 0),
+  currency VARCHAR(3) NOT NULL DEFAULT 'INR',
+  status VARCHAR(64) NOT NULL DEFAULT 'processed',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_refunds_payment_id ON refunds(payment_id);
+
+-- 7. Reconciliation Results (Deterministic Reconciliation Output)
+CREATE TABLE IF NOT EXISTS reconciliation_results (
+  id VARCHAR(128) PRIMARY KEY,
+  settlement_entity_id VARCHAR(128) NOT NULL,
+  merchant_order_id VARCHAR(128),
+  merchant_ledger_id VARCHAR(128),
+  payment_entity_id VARCHAR(128),
+  refund_entity_ids JSONB DEFAULT '[]'::jsonb,
+  status VARCHAR(64) NOT NULL,
+  exception_category VARCHAR(64),
+  reason TEXT NOT NULL,
+  amount_razorpay_paise BIGINT,
+  amount_merchant_paise BIGINT,
+  amount_variance_paise BIGINT,
+  fee_expected_paise BIGINT,
+  fee_actual_paise BIGINT,
+  tax_expected_paise BIGINT,
+  tax_actual_paise BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconciliation_results_status ON reconciliation_results(status);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_results_cat ON reconciliation_results(exception_category);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_results_settlement ON reconciliation_results(settlement_entity_id);
+
+-- 8. Audit Events (Immutable compliance ledger)
 CREATE TABLE IF NOT EXISTS audit_events (
   id VARCHAR(128) PRIMARY KEY,
   case_id VARCHAR(128) NOT NULL,

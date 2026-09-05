@@ -467,7 +467,7 @@ router.post('/:id/chat', async (req, res) => {
       savedAi,
     });
 
-    const conversationId = req.body?.conversationId || req.headers['x-conversation-id'] || `conv_${id}_default`;
+    const conversationId = req.body?.conversationId || req.body?.conversation_id || req.headers['x-conversation-id'] || `conv_${id}_default`;
 
     // ── Load previous conversation state from Redis ────────────────────────
     let redisState = null;
@@ -486,12 +486,21 @@ router.post('/:id/chat', async (req, res) => {
     });
 
     // ── Save updated conversation state to Redis ───────────────────────────
-    if (chatResult.conversationState) {
-      try {
-        await redisClient.saveConversationState(id, conversationId, chatResult.conversationState);
-      } catch (e) {
-        console.warn('[Redis] Transient save warning:', e.message);
-      }
+    try {
+      const baseState = chatResult.conversationState || {};
+      const updatedState = {
+        ...baseState,
+        investigationId: id,
+        conversationId,
+        turnNumber: (redisState?.turnNumber || 0) + 1,
+        currentIntent: chatResult.intent,
+        previousIntent: redisState?.currentIntent || redisState?.previousIntent || null,
+        lastUserQuestion: message.trim(),
+        lastAnswerSummary: chatResult.answer ? chatResult.answer.slice(0, 120) : null,
+      };
+      await redisClient.saveConversationState(id, conversationId, updatedState);
+    } catch (e) {
+      console.warn('[Redis] Transient save warning:', e.message);
     }
 
     return res.json({

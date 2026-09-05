@@ -1,6 +1,28 @@
 version: '3.8'
 
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payvault-app
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-payvault}:${POSTGRES_PASSWORD:-payvault_dev_secret}@postgres:5432/${POSTGRES_DB:-payvault}
+      - REDIS_URL=redis://redis:6379
+      - CHAT_CONTEXT_TTL_SECONDS=${CHAT_CONTEXT_TTL_SECONDS:-3600}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   postgres:
     image: postgres:15-alpine
     container_name: payvault-postgres

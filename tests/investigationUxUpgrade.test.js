@@ -365,4 +365,29 @@ describe('Payvault UX & Operations Dashboard Upgrade Suite', () => {
     });
   });
 
+  describe('8. Investigation Case ID Mapping & Re-Run Guarantee', () => {
+    test('Selected investigation exc_000001 routes to exc_000001 and never recon_000002', async () => {
+      // 1. Fetch reconciliation results and ensure exception_id is provided
+      const reconRes = await request(app).get('/api/reconciliation/results');
+      expect(reconRes.status).toBe(200);
+      const matched = reconRes.body.results.find(r => r.id === 'recon_000056');
+      if (matched) {
+        expect(matched.exception_id).toBe('exc_000001');
+      }
+
+      // 2. Run investigation with exc_000001 succeeds
+      const runRes = await request(app)
+        .post('/api/investigations/exc_000001/run')
+        .send({ actor: 'test_operator' });
+      expect(runRes.status).toBe(200);
+      expect(runRes.body.case_id).toBe('exc_000001');
+
+      // 3. Confirm recon_000002 is correctly rejected with 404
+      const failRes = await request(app)
+        .post('/api/investigations/recon_000002/run');
+      expect(failRes.status).toBe(404);
+      expect(failRes.body.error).toContain("Investigation case 'recon_000002' not found");
+    });
+  });
+
 });

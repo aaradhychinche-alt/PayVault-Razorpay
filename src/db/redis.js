@@ -169,6 +169,7 @@ async function saveConversationState(investigationId, conversationId, state, ttl
     conversationId,
     currentTopic:          state.currentTopic || null,
     previousIntent:        state.previousIntent || null,
+    currentIntent:         state.currentIntent || state.intent || null,
     referencedEntities:    state.referencedEntities || [],
     activeFinancialMetric: state.activeFinancialMetric || null,
     activeEvidenceTopic:   state.activeEvidenceTopic || null,
@@ -243,9 +244,19 @@ async function close() {
   _checked = false;
 }
 
+function isAvailable() {
+  return _isRealRedis;
+}
+
+function getMode() {
+  return _isRealRedis ? 'REDIS_PERSISTENT' : 'IN_MEMORY_FALLBACK';
+}
+
 module.exports = {
   getClient,
   checkConnection,
+  isAvailable,
+  getMode,
   buildConversationKey,
   saveConversationState,
   getConversationState,
